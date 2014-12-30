@@ -5,7 +5,7 @@
     "inetfuture(Aaron Wang) <inetfuture@gmail.com>"
   ],
   "description": "Tuisongbao Realtime Engine JavaScript Client SDK",
-  "main": "engine.js",
+  "main": "engine.min.js",
   "keywords": [
     "tuisongbao",
     "realtime",
