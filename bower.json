@@ -1,0 +1,23 @@
+{
+  "name": "tuisongbao-realtime-engine",
+  "version": "0.9.0",
+  "authors": [
+    "inetfuture(Aaron Wang) <inetfuture@gmail.com>"
+  ],
+  "description": "Tuisongbao Realtime Engine JavaScript Client SDK",
+  "main": "engine.js",
+  "keywords": [
+    "tuisongbao",
+    "realtime",
+    "engine"
+  ],
+  "license": "MIT",
+  "ignore": [
+    "**/.*",
+    "node_modules",
+    "bower_components",
+    "app/bower_components",
+    "test",
+    "tests"
+  ]
+}
