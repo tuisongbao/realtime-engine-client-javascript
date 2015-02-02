@@ -1,32 +1,91 @@
 (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
 'use strict';
-var Channel, EventEmitter, Utils,
-  __hasProp = {}.hasOwnProperty,
-  __extends = function(child, parent) { for (var key in parent) { if (__hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; };
+var Authorizer, Requester, debug;
+
+debug = require('debug')('engine:authorizer');
+
+Requester = require('./utils/requester');
+
+Authorizer = (function() {
+  function Authorizer(_at_engine) {
+    this.engine = _at_engine;
+  }
+
+  Authorizer.prototype.authorize = function(options, data, callback) {
+    var authData, authEndpoint, authTransport, requestMethod;
+    authEndpoint = options.authEndpoint || this.engine.options.authEndpoint;
+    if (!authEndpoint) {
+      Utils.throwError('authEndpoint is not configured.');
+    }
+    authTransport = options.authTransport || this.engine.options.authTransport;
+    authData = options.authData || this.engine.options.authData;
+    data.socketId = this.engine.connection.socketId;
+    if (authData) {
+      data.authData = authData;
+    }
+    if (window && authTransport === 'jsonp') {
+      requestMethod = Requester.jsonp;
+    } else {
+      requestMethod = Requester.post;
+    }
+    debug('send auth request', {
+      authEndpoint: authEndpoint,
+      data: data
+    });
+    return requestMethod(authEndpoint, data, function(err, authResult) {
+      debug('got auth response', {
+        err: err,
+        authResult: authResult
+      });
+      if (err) {
+        return callback({
+          message: 'Wrong auth response',
+          error: err
+        });
+      } else {
+        return callback(null, authResult);
+      }
+    });
+  };
+
+  return Authorizer;
+
+})();
+
+module.exports = Authorizer;
+
+
+
+},{"./utils/requester":15,"debug":19}],2:[function(require,module,exports){
+'use strict';
+var Channel, EventEmitter, debug,
+  __extends = function(child, parent) { for (var key in parent) { if (__hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
+  __hasProp = {}.hasOwnProperty;
+
+debug = require('debug')('engine:channel');
 
 EventEmitter = require('../utils/eventEmitter');
-
-Utils = require('../utils');
 
 Channel = (function(_super) {
   __extends(Channel, _super);
 
-  function Channel(name, engine) {
+  function Channel(_at_name, _at_engine) {
     var subscribed;
-    this.name = name;
-    this.engine = engine;
+    this.name = _at_name;
+    this.engine = _at_engine;
     subscribed = false;
   }
 
-  Channel.prototype._authorize = function(socketId, callback) {
-    return callback(false, {});
+  Channel.prototype._authorize = function(callback) {
+    return callback(false);
   };
 
   Channel.prototype.subscribe = function() {
-    return this._authorize(this.engine.connection.socketId, (function(_this) {
+    debug('subscribe', this.name);
+    return this._authorize((function(_this) {
       return function(err, data) {
         if (err) {
-          return _this.handleEvent('engine:subscription_error', data);
+          return _this.handleEvent('engine_channel:subscription_error', err);
         }
         return _this.engine.connection.sendEvent('engine_channel:subscribe', {
           channel: _this.name,
@@ -38,19 +97,22 @@ Channel = (function(_super) {
   };
 
   Channel.prototype.unsubscribe = function() {
+    debug('unsubscribe', this.name);
     return this.engine.connection.sendEvent('engine_channel:unsubscribe', {
       channel: this.name
     });
   };
 
-  Channel.prototype.handleEvent = function(name, data) {
-    if (name.indexOf('engine_channel:') !== -1) {
-      if (name === 'engine_channel:subscription_succeeded') {
+  Channel.prototype.handleEvent = function(event) {
+    switch (event.name) {
+      case 'engine_channel:subscription_succeeded':
         this.subscribed = true;
-        return this.emit('engine:subscription_succeeded', data);
-      }
-    } else {
-      return this.emit(name, data);
+        return this.emit('engine:subscription_succeeded', event.data);
+      case 'engine_channel:subscription_error':
+        this.subscribed = false;
+        return this.emit('engine:subscription_error', event.data);
+      default:
+        return this.emit(event.name, event.data);
     }
   };
 
@@ -66,7 +128,7 @@ module.exports = Channel;
 
 
 
-},{"../utils":12,"../utils/eventEmitter":11}],2:[function(require,module,exports){
+},{"../utils/eventEmitter":13,"debug":19}],3:[function(require,module,exports){
 'use strict';
 var Channel, Channels, PresenceChannel, PrivateChannel,
   __hasProp = {}.hasOwnProperty;
@@ -83,8 +145,8 @@ PresenceChannel = require('./presenceChannel');
  */
 
 Channels = (function() {
-  function Channels(engine) {
-    this.engine = engine;
+  function Channels(_at_engine) {
+    this.engine = _at_engine;
     this._store = {};
   }
 
@@ -118,7 +180,7 @@ Channels = (function() {
     var channel;
     channel = this._store[name];
     if (channel && this._isConnected()) {
-      chennel.unsubscribe();
+      channel.unsubscribe();
     }
     return channel;
   };
@@ -162,11 +224,11 @@ module.exports = Channels;
 
 
 
-},{"./channel":1,"./presenceChannel":3,"./privateChannel":4}],3:[function(require,module,exports){
+},{"./channel":2,"./presenceChannel":4,"./privateChannel":5}],4:[function(require,module,exports){
 'use strict';
 var PresenceChannel, PrivateChannel, Users,
-  __hasProp = {}.hasOwnProperty,
-  __extends = function(child, parent) { for (var key in parent) { if (__hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; };
+  __extends = function(child, parent) { for (var key in parent) { if (__hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
+  __hasProp = {}.hasOwnProperty;
 
 PrivateChannel = require('./privateChannel');
 
@@ -175,9 +237,9 @@ Users = require('./users');
 PresenceChannel = (function(_super) {
   __extends(PresenceChannel, _super);
 
-  function PresenceChannel(name, engine) {
-    this.name = name;
-    this.engine = engine;
+  function PresenceChannel(_at_name, _at_engine) {
+    this.name = _at_name;
+    this.engine = _at_engine;
     PresenceChannel.__super__.constructor.call(this, this.name, this.engine);
     this.users = new Users();
   }
@@ -194,24 +256,27 @@ PresenceChannel = (function(_super) {
     })(this));
   };
 
-  PresenceChannel.prototype.handleEvent = function(name, data) {
+  PresenceChannel.prototype.handleEvent = function(event) {
     var addedUser, removedUser;
-    switch (name) {
+    switch (event.name) {
       case 'engine_channel:subscription_succeeded':
         this.subscribed = true;
-        this.users.setUsers(data);
+        this.users.setUsers(event.data);
         return this.emit('engine:subscription_succeeded', this.users);
+      case 'engine_channel:subscription_error':
+        this.subscribed = false;
+        return this.emit('engine:subscription_error', event.data);
       case 'engine_channel:user_added':
-        addedUser = this.users.addUser(data);
+        addedUser = this.users.addUser(event.data);
         return this.emit('engine:user_added', addedUser);
       case 'engine_channel:user_removed':
-        removedUser = this.users.removeUser(data);
+        removedUser = this.users.removeUser(event.data);
         if (removedUser) {
           return this.emit('engine:user_removed', removedUser);
         }
         break;
       default:
-        return PresenceChannel.__super__.handleEvent.call(this, name, data);
+        return PresenceChannel.__super__.handleEvent.call(this, event);
     }
   };
 
@@ -228,15 +293,15 @@ module.exports = PresenceChannel;
 
 
 
-},{"./privateChannel":4,"./users":5}],4:[function(require,module,exports){
+},{"./privateChannel":5,"./users":6}],5:[function(require,module,exports){
 'use strict';
-var Ajax, Channel, PrivateChannel, Utils,
-  __hasProp = {}.hasOwnProperty,
-  __extends = function(child, parent) { for (var key in parent) { if (__hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; };
+var Channel, PrivateChannel, Requester, Utils,
+  __extends = function(child, parent) { for (var key in parent) { if (__hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
+  __hasProp = {}.hasOwnProperty;
 
 Channel = require('./channel');
 
-Ajax = require('../utils/ajax');
+Requester = require('../utils/requester');
 
 Utils = require('../utils');
 
@@ -247,24 +312,10 @@ PrivateChannel = (function(_super) {
     return PrivateChannel.__super__.constructor.apply(this, arguments);
   }
 
-  PrivateChannel.prototype._authorize = function(socketId, callback) {
-    var _ref;
-    if (!((_ref = this.engine.options) != null ? _ref.authEndpoint : void 0)) {
-      Utils.throwError('authEndpoint is not configured');
-    }
-    return Ajax.postJSON(this.engine.options.authEndpoint, {
-      socketId: socketId,
+  PrivateChannel.prototype._authorize = function(callback) {
+    return this.engine.authorizer.authorize({}, {
       channelName: this.name
-    }, function(err, authResult) {
-      if (err) {
-        return callback(true, {
-          message: 'Wrong auth response',
-          error: err
-        });
-      } else {
-        return callback(false, authResult);
-      }
-    });
+    }, callback);
   };
 
   return PrivateChannel;
@@ -275,7 +326,7 @@ module.exports = PrivateChannel;
 
 
 
-},{"../utils":12,"../utils/ajax":10,"./channel":1}],5:[function(require,module,exports){
+},{"../utils":14,"../utils/requester":15,"./channel":2}],6:[function(require,module,exports){
 'use strict';
 var Users;
 
@@ -354,12 +405,184 @@ module.exports = Users;
 
 
 
-},{}],6:[function(require,module,exports){
+},{}],7:[function(require,module,exports){
+'use strict';
+var ChatManager, Protocol, api, debug, event, trivialRequestResponseAPIEventMapping, _fn;
+
+debug = require('debug')('engine:chatManager');
+
+Protocol = require('./protocol');
+
+ChatManager = (function() {
+  function ChatManager(_at_engine) {
+    this.engine = _at_engine;
+    this._loginOptions = null;
+    this.user = null;
+    this.loggedIn = false;
+  }
+
+  ChatManager.prototype._separateOptionsAndHandlers = function(originalOptions) {
+    var handlers, k, options, v;
+    options = {};
+    handlers = {};
+    for (k in originalOptions) {
+      v = originalOptions[k];
+      if (typeof v === 'function') {
+        handlers[k] = v;
+      } else {
+        options[k] = v;
+      }
+    }
+    return [options, handlers];
+  };
+
+  ChatManager.prototype._request = function(eventName, options, needSendAck) {
+    var callback, handlers, _ref;
+    _ref = this._separateOptionsAndHandlers(options), options = _ref[0], handlers = _ref[1];
+    if (!this.loggedIn) {
+      return typeof handlers.onError === "function" ? handlers.onError(Protocol.responseErrors.unauthorized) : void 0;
+    }
+    callback = function(err, result) {
+      if (err) {
+        return typeof handlers.onError === "function" ? handlers.onError(err) : void 0;
+      } else {
+        return typeof handlers.onSuccess === "function" ? handlers.onSuccess(result) : void 0;
+      }
+    };
+    if (needSendAck) {
+      callback.needSendAck = true;
+    }
+    return this.engine.connection.sendEvent(eventName, options, callback);
+  };
+
+  ChatManager.prototype.login = function(options) {
+    var handlers, _ref, _ref1;
+    if (options == null) {
+      options = {};
+    }
+    this._loginOptions = options;
+    if (this.engine.connection.state !== 'connected') {
+      return;
+    }
+    _ref = this._separateOptionsAndHandlers(options), options = _ref[0], handlers = _ref[1];
+    if (!options.authData) {
+      options.authData = (_ref1 = this.engine.options) != null ? _ref1.authData : void 0;
+    }
+    return this.engine.authorizer.authorize(options, {
+      chatLogin: true
+    }, (function(_this) {
+      return function(err, authResult) {
+        if (err) {
+          return typeof handlers.onError === "function" ? handlers.onError(err) : void 0;
+        }
+        try {
+          _this.user = JSON.parse(authResult.userData);
+        } catch (_error) {}
+        return _this.engine.connection.sendEvent('engine_chat:user:login', authResult, function(err, result) {
+          var k, v;
+          if (err) {
+            if (err.code === Protocol.responseErrors.noConnection) {
+              return;
+            }
+            debug('login error', err);
+            return typeof handlers.onError === "function" ? handlers.onError(err) : void 0;
+          }
+          for (k in result) {
+            v = result[k];
+            _this.user[k] = v;
+          }
+          _this.loggedIn = true;
+          debug('login succeeded', result);
+          return typeof handlers.onSuccess === "function" ? handlers.onSuccess(result) : void 0;
+        });
+      };
+    })(this));
+  };
+
+  ChatManager.prototype.autoLogin = function() {
+    if (this._loginOptions) {
+      return this.login(this._loginOptions);
+    }
+  };
+
+  ChatManager.prototype.logout = function(options) {
+    var handlers, _ref;
+    this._loginOptions = null;
+    _ref = this._separateOptionsAndHandlers(options), options = _ref[0], handlers = _ref[1];
+    return this.engine.connection.sendEvent('engine_chat:user:logout', (function(_this) {
+      return function(err) {
+        if (err) {
+          if (err.code === Protocol.responseErrors.noConnection) {
+            return;
+          }
+          debug('logout error', err);
+          return typeof handlers.onError === "function" ? handlers.onError(err) : void 0;
+        }
+        _this.loggedIn = false;
+        _this.user = null;
+        debug('logout succeeded');
+        return typeof handlers.onSuccess === "function" ? handlers.onSuccess() : void 0;
+      };
+    })(this));
+  };
+
+  ChatManager.prototype.handleEvent = function(event) {
+    var _base, _base1;
+    if (!this._loginOptions) {
+      return;
+    }
+    switch (event.name) {
+      case 'engine_chat:message:new':
+        if (typeof (_base = this._loginOptions).onNewMessage === "function") {
+          _base.onNewMessage(event.data);
+        }
+        return this.engine.connection.sendResponseEvent(event.id);
+      case 'engine_chat:user:presenceChanged':
+        return typeof (_base1 = this._loginOptions).onUserPresenceChanged === "function" ? _base1.onUserPresenceChanged(event.data) : void 0;
+    }
+  };
+
+  return ChatManager;
+
+})();
+
+trivialRequestResponseAPIEventMapping = {
+  getGroups: 'engine_chat:group:get',
+  getGroupUsers: 'engine_chat:group:getUsers',
+  createGroup: 'engine_chat:group:create',
+  inviteUsersIntoGroup: 'engine_chat:group:joinInvitation:send',
+  removeGroupUsers: 'engine_chat:group:removeUsers',
+  leaveGroup: 'engine_chat:group:leave',
+  getConversations: 'engine_chat:conversation:get',
+  resetConversationUnread: 'engine_chat:conversation:resetUnread',
+  deleteConversation: 'engine_chat:conversation:delete',
+  sendMessage: 'engine_chat:message:send',
+  getMessages: {
+    name: 'engine_chat:message:get',
+    needSendAck: true
+  }
+};
+
+_fn = function(event) {
+  return ChatManager.prototype[api] = function(options) {
+    return this._request(event.name || event, options, event.needSendAck);
+  };
+};
+for (api in trivialRequestResponseAPIEventMapping) {
+  event = trivialRequestResponseAPIEventMapping[api];
+  _fn(event);
+}
+
+module.exports = ChatManager;
+
+
+
+},{"./protocol":12,"debug":19}],8:[function(require,module,exports){
 (function (process){
 'use strict';
-var Connection, EventEmitter, PROTOCOL, Protocol, ServerAddrManager, Utils, debug, eio,
-  __hasProp = {}.hasOwnProperty,
-  __extends = function(child, parent) { for (var key in parent) { if (__hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; };
+var Connection, EventEmitter, Protocol, SDK_VERSION, ServerAddrManager, Utils, debug, eio,
+  __extends = function(child, parent) { for (var key in parent) { if (__hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
+  __hasProp = {}.hasOwnProperty;
 
 debug = require('debug')('engine:connection');
 
@@ -369,11 +592,11 @@ EventEmitter = require('../utils/eventEmitter');
 
 ServerAddrManager = require('./serverAddrManager');
 
-Protocol = require('../../protocol');
-
 Utils = require('../utils');
 
-PROTOCOL = 'v1';
+Protocol = require('../protocol');
+
+SDK_VERSION = 'v0.9.1';
 
 
 /**
@@ -393,10 +616,9 @@ PROTOCOL = 'v1';
 Connection = (function(_super) {
   __extends(Connection, _super);
 
-  function Connection(appId, options) {
-    this.appId = appId;
-    this.options = options;
-    this._serverAddrManager = new ServerAddrManager(this.appId);
+  function Connection(_at_engine) {
+    this.engine = _at_engine;
+    this._serverAddrManager = new ServerAddrManager(this.engine);
     this._updateState('initialized');
     this._connect();
   }
@@ -433,6 +655,23 @@ Connection = (function(_super) {
     }
   };
 
+  Connection.prototype._handleResponseEvent = function(event) {
+    var callback;
+    callback = this._socket.pendingCallbacks[event.data.to];
+    if (!callback) {
+      return;
+    }
+    delete this._socket.pendingCallbacks[event.data.to];
+    if (event.data.ok) {
+      callback(null, event.data.result);
+      if (callback.needSendAck) {
+        return this.sendResponseEvent(event.id);
+      }
+    } else {
+      return callback(event.data.err);
+    }
+  };
+
   Connection.prototype._connect = function(onSocketCreated) {
     var availableEvents, event, fakeSocket, listener, serverAddr, _i, _len, _results;
     serverAddr = this._serverAddrManager.addr;
@@ -455,10 +694,13 @@ Connection = (function(_super) {
     fakeSocket = this._socket;
     this._socket = new eio.Socket(serverAddr, {
       query: {
-        appId: this.appId,
-        protocol: PROTOCOL
+        appId: this.engine.appId,
+        platform: Utils.getPlatform(),
+        sdkVersion: SDK_VERSION,
+        protocol: Protocol.version
       }
     });
+    this._socket.pendingCallbacks = {};
     this._socket.on('open', function() {
       return debug('socket open');
     });
@@ -469,14 +711,13 @@ Connection = (function(_super) {
           event = Protocol.decodeEvent(message);
         } catch (_error) {
           err = _error;
-          _this.emit('error', {
-            message: 'Event decode error',
-            error: err
-          });
-          return;
+          return _this.emit('error', err);
         }
-        if (event.name.indexOf('engine_connection:') !== -1) {
+        debug('got event', event);
+        if (Protocol.connectionEventNamePattern.test(event.name)) {
           return _this._handleConnectionEvent(event);
+        } else if (Protocol.responseEventNamePattern.test(event.name)) {
+          return _this._handleResponseEvent(event);
         } else {
           return _this.emit('event', event);
         }
@@ -515,23 +756,58 @@ Connection = (function(_super) {
     }
   };
 
-  Connection.prototype.sendEvent = function(name, data) {
-    var err, message;
-    if (this.state === 'connected') {
-      try {
-        message = Protocol.encodeEvent({
-          name: name,
-          data: data
-        });
-      } catch (_error) {
-        err = _error;
-        Utils.throwError(err);
-      }
-      this._socket.send(message);
-      return true;
-    } else {
-      return false;
+  Connection.prototype.sendEvent = function(name, data, callback) {
+    var message;
+    if (typeof data === 'function') {
+      callback = data;
+      data = null;
     }
+    debug('send event', {
+      name: name,
+      data: data
+    });
+    if (this.state === 'connected') {
+      if (this.eventId == null) {
+        this.eventId = 0;
+      }
+      this.eventId++;
+      message = Protocol.encodeEvent({
+        id: this.eventId,
+        name: name,
+        data: data
+      });
+      this._socket.send(message);
+      if (callback) {
+        if (callback) {
+          return this._socket.pendingCallbacks[this.eventId] = callback;
+        }
+      } else {
+        return true;
+      }
+    } else {
+      if (callback) {
+        return callback(Protocol.responseErrors.noConnection);
+      } else {
+        return false;
+      }
+    }
+  };
+
+  Connection.prototype.sendResponseEvent = function(eventId, err, result) {
+    var data;
+    data = {
+      to: eventId
+    };
+    if (err) {
+      data.ok = false;
+      data.err = err;
+    } else {
+      data.ok = true;
+      if (result) {
+        data.result = result;
+      }
+    }
+    return this.sendEvent('engine_response', data);
   };
 
   Connection.prototype.disconnect = function() {
@@ -551,11 +827,11 @@ module.exports = Connection;
 
 
 }).call(this,require('_process'))
-},{"../../protocol":13,"../utils":12,"../utils/eventEmitter":11,"./serverAddrManager":8,"_process":47,"debug":14,"engine.io-client":17}],7:[function(require,module,exports){
+},{"../protocol":12,"../utils":14,"../utils/eventEmitter":13,"./serverAddrManager":10,"_process":57,"debug":19,"engine.io-client":22}],9:[function(require,module,exports){
 'use strict';
 var AutoReconnectConnection, Connection, UNAVAILABLE_THRESHOLD, debug,
-  __hasProp = {}.hasOwnProperty,
-  __extends = function(child, parent) { for (var key in parent) { if (__hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; };
+  __extends = function(child, parent) { for (var key in parent) { if (__hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
+  __hasProp = {}.hasOwnProperty;
 
 debug = require('debug')('engine:connection');
 
@@ -576,10 +852,9 @@ UNAVAILABLE_THRESHOLD = 30 * 1000;
 AutoReconnectConnection = (function(_super) {
   __extends(AutoReconnectConnection, _super);
 
-  function AutoReconnectConnection(appId, options) {
-    this.appId = appId;
-    this.options = options;
-    AutoReconnectConnection.__super__.constructor.call(this, this.appId, this.options);
+  function AutoReconnectConnection(_at_engine) {
+    this.engine = _at_engine;
+    AutoReconnectConnection.__super__.constructor.call(this, this.engine);
     this._resetReconnectState();
   }
 
@@ -682,23 +957,23 @@ module.exports = AutoReconnectConnection;
 
 
 
-},{"./connection":6,"debug":14}],8:[function(require,module,exports){
+},{"./connection":8,"debug":19}],10:[function(require,module,exports){
 'use strict';
-var Ajax, EventEmitter, GET_SERVER_ADDR_URL, ServerAddrManager,
-  __hasProp = {}.hasOwnProperty,
-  __extends = function(child, parent) { for (var key in parent) { if (__hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; };
+var EventEmitter, GET_SERVER_ADDR_URL, Requester, ServerAddrManager,
+  __extends = function(child, parent) { for (var key in parent) { if (__hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
+  __hasProp = {}.hasOwnProperty;
 
 EventEmitter = require('../utils/eventEmitter');
 
-Ajax = require('../utils/ajax');
+Requester = require('../utils/requester');
 
 GET_SERVER_ADDR_URL = 'https://api.tuisongbao.com:443/v2/sdk/engine/server';
 
 ServerAddrManager = (function(_super) {
   __extends(ServerAddrManager, _super);
 
-  function ServerAddrManager(appId) {
-    this.appId = appId;
+  function ServerAddrManager(_at_engine) {
+    this.engine = _at_engine;
     this._refreshing = false;
   }
 
@@ -708,8 +983,8 @@ ServerAddrManager = (function(_super) {
     }
     this.addr = null;
     this._refreshing = true;
-    return Ajax.getJSON(GET_SERVER_ADDR_URL, {
-      appId: this.appId
+    return Requester.getWithJSONPFallback(GET_SERVER_ADDR_URL, {
+      appId: this.engine.appId
     }, (function(_this) {
       return function(err, server) {
         _this._refreshing = false;
@@ -720,7 +995,7 @@ ServerAddrManager = (function(_super) {
           return _this.emit('refreshed');
         }
       };
-    })(this));
+    })(this), this.engine.options);
   };
 
   return ServerAddrManager;
@@ -731,9 +1006,9 @@ module.exports = ServerAddrManager;
 
 
 
-},{"../utils/ajax":10,"../utils/eventEmitter":11}],9:[function(require,module,exports){
+},{"../utils/eventEmitter":13,"../utils/requester":15}],11:[function(require,module,exports){
 'use strict';
-var Channels, Connection, Engine, Utils, debug;
+var Authorizer, Channels, ChatManager, Connection, Engine, Protocol, Utils, debug;
 
 debug = require('debug')('engine:index');
 
@@ -741,17 +1016,25 @@ Utils = require('./utils');
 
 Connection = require('./connection');
 
+Authorizer = require('./authorizer');
+
 Channels = require('./channels');
 
+ChatManager = require('./chatManager');
+
+Protocol = require('./protocol');
+
 Engine = (function() {
-  function Engine(appId, options) {
-    this.appId = appId;
-    this.options = options;
+  function Engine(_at_appId, _at_options) {
+    this.appId = _at_appId;
+    this.options = _at_options;
     if (!this.appId) {
-      Utils.throwError('appId is required');
+      Utils.throwError('appId is required.');
     }
-    this.connection = new Connection(this.appId, this.options);
+    this.connection = new Connection(this);
+    this.authorizer = new Authorizer(this);
     this.channels = new Channels(this);
+    this.chatManager = new ChatManager(this);
     this.connection.bind('state_changed', function(states) {
       return debug('connection state_changed', states);
     });
@@ -760,16 +1043,18 @@ Engine = (function() {
     });
     this.connection.bind('connected', (function(_this) {
       return function() {
-        return _this.channels.subscribe();
+        _this.channels.subscribe();
+        return _this.chatManager.autoLogin();
       };
     })(this));
     this.connection.bind('event', (function(_this) {
       return function(event) {
         var channel;
-        debug('connection event', event);
         if (event.channel) {
           channel = _this.channel(event.channel);
-          return channel.handleEvent(event.name, event.data);
+          return channel.handleEvent(event);
+        } else if (Protocol.chatEventNamePattern.test(event.name)) {
+          return _this.chatManager.handleEvent(event);
         }
       };
     })(this));
@@ -784,23 +1069,17 @@ Engine = (function() {
   }
 
   Engine.prototype.subscribe = function(channelName) {
-    if (!channelName) {
-      Utils.throwError('channelName is required');
-    }
+    Protocol.validateChannel(channelName);
     return this.channels.add(channelName);
   };
 
   Engine.prototype.unsubscribe = function(channelName) {
-    if (!channelName) {
-      Utils.throwError('channelName is required');
-    }
-    return this.channels.remove;
+    Protocol.validateChannel(channelName);
+    return this.channels.remove(channelName);
   };
 
   Engine.prototype.channel = function(channelName) {
-    if (!channelName) {
-      Utils.throwError('channelName is required');
-    }
+    Protocol.validateChannel(channelName);
     return this.channels.find(channelName);
   };
 
@@ -810,97 +1089,46 @@ Engine = (function() {
 
 })();
 
-window.Engine = Engine;
+if (typeof window !== "undefined" && window !== null) {
+  window.Engine = Engine;
+}
+
+module.exports = Engine;
 
 
 
-},{"./channels":2,"./connection":7,"./utils":12,"debug":14}],10:[function(require,module,exports){
+},{"./authorizer":1,"./channels":3,"./chatManager":7,"./connection":9,"./protocol":12,"./utils":14,"debug":19}],12:[function(require,module,exports){
 'use strict';
-var Ajax, XMLHttpRequest;
+var BaseProtocol, Protocol, utils,
+  __extends = function(child, parent) { for (var key in parent) { if (__hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
+  __hasProp = {}.hasOwnProperty;
 
-XMLHttpRequest = require('engine.io-client/lib/xmlhttprequest');
+BaseProtocol = require('../protocol');
 
-Ajax = (function() {
-  function Ajax() {}
+utils = require('./utils');
 
-  Ajax._request = function(method, url, headers, data, cb) {
-    var err, name, value, xhr;
-    if (headers == null) {
-      headers = {};
-    }
-    xhr = new XMLHttpRequest({});
-    xhr.open(method, url, true);
-    for (name in headers) {
-      value = headers[name];
-      xhr.setRequestHeader(name, value);
-    }
-    xhr.onload = function() {
-      var err, responseJSON;
-      if (xhr.readyState !== 4) {
-        return;
-      }
-      if (xhr.status !== 200) {
-        return cb(new Error("Unexpected response, status: " + xhr.status));
-      }
-      try {
-        responseJSON = JSON.parse(xhr.responseText);
-      } catch (_error) {
-        err = _error;
-        return cb(err);
-      }
-      return cb(null, responseJSON);
-    };
-    xhr.onerror = function() {
-      return cb(new Error("Unexpected response, status: " + xhr.status));
-    };
-    try {
-      return xhr.send(data);
-    } catch (_error) {
-      err = _error;
-      return cb(err);
-    }
-  };
+Protocol = (function(_super) {
+  __extends(Protocol, _super);
 
-  Ajax.getJSON = function(url, data, cb) {
-    var key, queryPairs, value;
-    data || (data = {});
-    data.timestamp = Date.now();
-    queryPairs = [];
-    for (key in data) {
-      value = data[key];
-      queryPairs.push("" + key + "=" + value);
-    }
-    if (url.indexOf('?') === -1) {
-      url += '?';
-    } else {
-      url += '&';
-    }
-    url += queryPairs.join('&');
-    return this._request('GET', url, null, null, cb);
-  };
+  function Protocol() {
+    return Protocol.__super__.constructor.apply(this, arguments);
+  }
 
-  Ajax.postJSON = function(url, data, cb) {
-    var headers;
-    headers = {
-      'Content-Type': 'application/json'
-    };
-    data = JSON.stringify(data);
-    return this._request('POST', url, headers, data, cb);
-  };
+  Protocol._throwError = utils.throwError;
 
-  return Ajax;
+  return Protocol;
 
-})();
+})(BaseProtocol);
 
-module.exports = Ajax;
+module.exports = Protocol;
 
 
 
-},{"engine.io-client/lib/xmlhttprequest":26}],11:[function(require,module,exports){
+},{"../protocol":18,"./utils":14}],13:[function(require,module,exports){
 'use strict';
 var EventEmitter, events,
-  __hasProp = {}.hasOwnProperty,
-  __extends = function(child, parent) { for (var key in parent) { if (__hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; };
+  __extends = function(child, parent) { for (var key in parent) { if (__hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
+  __hasProp = {}.hasOwnProperty;
 
 events = require('events');
 
@@ -931,7 +1159,8 @@ module.exports = EventEmitter;
 
 
 
-},{"events":46}],12:[function(require,module,exports){
+},{"events":56}],14:[function(require,module,exports){
+(function (process){
 'use strict';
 var Utils;
 
@@ -945,6 +1174,56 @@ Utils = (function() {
     throw err;
   };
 
+  Utils.genRandomStr = function() {
+    var i, possibleChars, randomChars;
+    possibleChars = 'abcdefghijklmnopqrstuvwxyz_';
+    randomChars = (function() {
+      var _i, _results;
+      _results = [];
+      for (i = _i = 0; _i < 20; i = ++_i) {
+        _results.push(possibleChars[Math.floor(Math.random() * possibleChars.length)]);
+      }
+      return _results;
+    })();
+    return randomChars.join('');
+  };
+
+  Utils.checkBrowser = (function() {
+    var match, platform_match, ret, ua;
+    ua = window.navigator.userAgent.toLowerCase();
+    match = /(edge)\/([\w.]+)/.exec(ua) || /(opr)[\/]([\w.]+)/.exec(ua) || /(chrome)[ \/]([\w.]+)/.exec(ua);
+    match || (match = /(version)(applewebkit)[ \/]([\w.]+).*(safari)[ \/]([\w.]+)/.exec(ua));
+    match || (match = /(webkit)[ \/]([\w.]+).*(version)[ \/]([\w.]+).*(safari)[ \/]([\w.]+)/.exec(ua));
+    match || (match = /(webkit)[ \/]([\w.]+)/.exec(ua) || /(opera)(?:.*version|)[ \/]([\w.]+)/.exec(ua));
+    match || (match = /(msie) ([\w.]+)/.exec(ua) || ua.indexOf('trident') >= 0 && /(rv)(?::| )([\w.]+)/.exec(ua));
+    match || (match = ua.indexOf('compatible') < 0 && /(mozilla)(?:.*? rv:([\w.]+)|)/.exec(ua) || []);
+    platform_match = /(ipad)/.exec(ua) || /(ipod)/.exec(ua) || /(iphone)/.exec(ua) || /(kindle)/.exec(ua);
+    platform_match || (platform_match = /(silk)/.exec(ua) || /(android)/.exec(ua) || /(windows phone)/.exec(ua) || /(win)/.exec(ua));
+    platform_match || (platform_match = /(mac)/.exec(ua) || /(linux)/.exec(ua) || /(cros)/.exec(ua) || /(playbook)/.exec(ua));
+    platform_match || (platform_match = /(bb)/.exec(ua) || /(blackberry)/.exec(ua) || []);
+    ret = {
+      browser: match[5] || match[3] || match[1] || '',
+      version: match[2] || match[4] || '0',
+      versionNumber: match[4] || match[2] || '0',
+      platform: platform_match[0] || ''
+    };
+    return function() {
+      return ret;
+    };
+  })();
+
+  Utils.getPlatform = (function() {
+    var ret;
+    if (typeof window !== "undefined" && window !== null) {
+      ret = window.navigator.userAgent;
+    } else {
+      ret = "Node.js " + process.version + "$" + process.platform + "$" + process.arch;
+    }
+    return function() {
+      return ret;
+    };
+  })();
+
   return Utils;
 
 })();
@@ -953,80 +1232,423 @@ module.exports = Utils;
 
 
 
-},{}],13:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"_process":57}],15:[function(require,module,exports){
+'use strict';
+var BrowserRequester, NodeRequester, Utils, browserInfo, debug, formatGetUrl, jsonpRequest, needJSONP, request, xmlHttpRequest;
+
+debug = require('debug')('engine:utils:requester');
+
+request = require('superagent');
+
+jsonpRequest = require('./jsonpRequest');
+
+xmlHttpRequest = require('./xmlHttpRequest');
+
+Utils = require('../index');
+
+browserInfo = Utils.checkBrowser();
+
+needJSONP = browserInfo.browser === 'msie' && parseFloat(browserInfo.versionNumber) < 10 ? true : false;
+
+formatGetUrl = function(url, data) {
+  var key, queryPairs, value;
+  data.timestamp = new Date().getTime();
+  queryPairs = [];
+  for (key in data) {
+    value = data[key];
+    queryPairs.push(key + "=" + value);
+  }
+  if (url.indexOf('?') === -1) {
+    url += '?';
+  } else {
+    url += '&';
+  }
+  return url += queryPairs.join('&');
+};
+
+BrowserRequester = (function() {
+  function BrowserRequester() {}
+
+  BrowserRequester.get = function(url, data, callback) {
+    if (typeof data === 'function') {
+      callback = data;
+      data = {};
+    }
+    url = formatGetUrl(url, data);
+    debug('xmlHttpRequest.get', {
+      url: url,
+      data: data
+    });
+    return xmlHttpRequest.get(url, callback);
+  };
+
+  BrowserRequester.getWithJSONPFallback = function(url, data, callback) {
+    var requestMethod;
+    requestMethod = needJSONP ? this.jsonp : this.get;
+    return requestMethod(url, data, callback);
+  };
+
+  BrowserRequester.post = function(url, data, callback) {
+    if (typeof data === 'function') {
+      callback = data;
+      data = {};
+    }
+    debug('xmlHttpRequest.post', {
+      url: url,
+      data: data
+    });
+    return xmlHttpRequest.post(url, data, callback);
+  };
+
+  BrowserRequester.postWithJSONPFallback = function(url, data, call) {
+    var requestMethod;
+    requestMethod = needJSONP ? this.jsonp : this.post;
+    return requestMethod(url, data, callback);
+  };
+
+  BrowserRequester.jsonp = function(url, data, callback) {
+    if (typeof data === 'function') {
+      callback = data;
+      data = {};
+    }
+    if (!data.callback) {
+      data.callback = Utils.genRandomStr();
+    }
+    url = formatGetUrl(url, data);
+    debug('jsonp', {
+      url: url,
+      data: data
+    });
+    return jsonpRequest.get(url, callback);
+  };
+
+  return BrowserRequester;
+
+})();
+
+NodeRequester = (function() {
+  function NodeRequester() {}
+
+  NodeRequester.get = function(url, data, callback) {
+    return request.get(url).query(data).end(callback);
+  };
+
+  NodeRequester.getWithJSONPFallback = NodeRequester.get;
+
+  NodeRequester.post = function(url, data, callback) {
+    return request.post(url).send(data).end(callback);
+  };
+
+  NodeRequester.postWithJSONPFallback = NodeRequester.post;
+
+  return NodeRequester;
+
+})();
+
+module.exports = typeof window !== "undefined" && window !== null ? BrowserRequester : NodeRequester;
+
+
+
+},{"../index":14,"./jsonpRequest":16,"./xmlHttpRequest":17,"debug":19,"superagent":51}],16:[function(require,module,exports){
+'use strict';
+var getCallbackFromUrl, loadScript;
+
+loadScript = function(url, callback) {
+  var done, insertAt, jsonpTimer, script;
+  done = false;
+  script = document.createElement('script');
+  script.type = 'text/javascript';
+  script.src = url;
+  script.async = true;
+  jsonpTimer = setTimeout(function() {
+    return callback(new Error('jsonp request 10s timeout'));
+  }, 10000);
+  script.onload = script.onreadystatechange = function() {
+    if (!done && (!this.readyState || this.readyState === 'loaded' || this.readyState === 'complete')) {
+      done = true;
+      script.onload = script.onreadystatechange = null;
+      if (script && script.parentNode) {
+        script.parentNode.removeChild(script);
+      }
+      clearTimeout(jsonpTimer);
+      return callback();
+    }
+  };
+  insertAt = document.getElementsByTagName('script')[0];
+  return insertAt.parentNode.insertBefore(script, insertAt);
+};
+
+getCallbackFromUrl = function(url) {
+  var callbackRegExp, matches;
+  callbackRegExp = /[\?|&]callback=([a-z0-9_]+)/i;
+  matches = url.match(callbackRegExp);
+  if (!matches) {
+    throw new Error('Could not find callback on URL');
+  }
+  return matches[1];
+};
+
+module.exports.get = function(url, callback) {
+  var callbackName, data, err, originalCallback;
+  try {
+    callbackName = getCallbackFromUrl(url);
+  } catch (_error) {
+    err = _error;
+    return callback(err);
+  }
+  data = void 0;
+  originalCallback = window[callbackName];
+  window[callbackName] = function(jsonpData) {
+    return data = jsonpData;
+  };
+  return loadScript(url, function(err) {
+    if (!data) {
+      err = new Error("JSONP requeset need a JSON response");
+    }
+    if (originalCallback) {
+      window[callbackName] = originalCallback;
+    } else {
+      try {
+        delete window[callbackName];
+      } catch (_error) {
+        err = _error;
+        window[callbackName] = void 0;
+      }
+    }
+    return callback(err, data);
+  });
+};
+
+
+
+},{}],17:[function(require,module,exports){
+'use strict';
+var getXHR, request;
+
+getXHR = function() {
+  try {
+    if (window.XMLHttpRequest) {
+      return new XMLHttpRequest();
+    }
+  } catch (_error) {}
+};
+
+request = function(method, url, headers, data, cb) {
+  var err, name, value, xhr;
+  if (headers == null) {
+    headers = {};
+  }
+  xhr = getXHR();
+  xhr.open(method, url, true);
+  for (name in headers) {
+    value = headers[name];
+    xhr.setRequestHeader(name, value);
+  }
+  xhr.onload = function() {
+    var err, responseJSON;
+    if (xhr.readyState !== 4) {
+      return;
+    }
+    if (xhr.status !== 200) {
+      return cb(new Error("Unexpected response, status: " + xhr.status));
+    }
+    try {
+      responseJSON = JSON.parse(xhr.responseText);
+    } catch (_error) {
+      err = _error;
+      return cb(err);
+    }
+    return cb(null, responseJSON);
+  };
+  xhr.onerror = function() {
+    return cb(new Error("Unexpected response, status: " + xhr.status));
+  };
+  try {
+    return xhr.send(data);
+  } catch (_error) {
+    err = _error;
+    return cb(err);
+  }
+};
+
+exports.get = function(url, cb) {
+  return request('GET', url, null, null, cb);
+};
+
+exports.post = function(url, data, cb) {
+  var headers;
+  headers = {
+    'Content-Type': 'application/json'
+  };
+  data = JSON.stringify(data);
+  return request('POST', url, headers, data, cb);
+};
+
+
+
+},{}],18:[function(require,module,exports){
+(function (Buffer){
 'use strict';
 
 /**
  * Common protocol related code shared between server and js clent.
- *
- * No server-only or client-only code should be put here.
  */
-var Protocol;
+var Protocol,
+  __indexOf = [].indexOf || function(item) { for (var i = 0, l = this.length; i < l; i++) { if (i in this && this[i] === item) return i; } return -1; };
 
 Protocol = (function() {
   function Protocol() {}
 
+  Protocol.version = 'v1';
+
+  Protocol.eventNameMaxLength = 128;
+
+  Protocol.eventDataMaxSize = 10 * 1024;
+
+  Protocol.channelNamePattern = new RegExp('^[a-zA-Z0-9_\\-=@,.;]+$');
+
+  Protocol.channelNameFullPattern = new RegExp('^[a-zA-Z0-9_\\-=@,.;]{1,128}$');
+
+  Protocol.privateChannelNameFullPattern = new RegExp('^private-[a-zA-Z0-9_\\-=@,.;]{0,120}$');
+
+  Protocol.presenceChannelNameFullPattern = new RegExp('^presence-[a-zA-Z0-9_\\-=@,.;]{0,119}$');
+
+  Protocol.channelNameMaxLength = 128;
+
+  Protocol.presenceChannelUserMaxCount = 1000;
+
+  Protocol.presenceChannelUserIdMaxLength = 128;
+
+  Protocol.presenceChannelUserInfoMaxSize = 1 * 1024;
+
+  Protocol.internalEventNamePattern = new RegExp('^engine_.*');
+
+  Protocol.connectionEventNamePattern = new RegExp('^engine_connection');
+
+  Protocol.channelEventNamePattern = new RegExp('^engine_channel');
+
+  Protocol.chatEventNamePattern = new RegExp('^engine_chat');
+
+  Protocol.responseEventNamePattern = new RegExp('^engine_response$');
+
 
   /**
-   * 4000 ~ 4099: client should not try to reconnect
-   * 4100 ~ 4199: client should try to reconnect as instructed
-   * 4200 ~ 4299: client may reconnect immediately
+   * 4000 ~ 4099: socket will be closed by server, client should not try to reconnect
+   * 4100 ~ 4199: socket will be closed by server, client should try to reconnect as instructed
+   * 4200 ~ 4299: socket will be closed by server, client may reconnect immediately
    * 4300 ~ 4399: other errors
    */
 
-  Protocol.errors = {
-    invalidRequest: {
+  Protocol.connErrors = {
+    requestInvalid: {
       code: 4000,
-      message: 'Invalid request'
+      message: 'Request is invalid.'
     },
-    unsupportedProtocolVersion: {
+    requestProtocolNotSupported: {
       code: 4001,
-      message: 'Unsupported protocol version'
+      message: 'Request protocol is not supported.'
     },
-    unknownMessage: {
-      code: 4002,
-      message: 'Unknown message'
+    eventInvalid: {
+      code: 4010,
+      message: 'Event is invalid.'
     },
-    invalidEventData: {
-      code: 4003,
-      message: 'Invalid event data'
+    eventNameTooLong: {
+      code: 4011,
+      message: 'Event name is too long.'
+    },
+    eventDataTooBig: {
+      code: 4012,
+      message: 'Event data is too big.'
     },
     appNotExists: {
-      code: 4010,
-      message: 'App does not exist'
+      code: 4020,
+      message: 'App does not exist.'
     },
     appDisabled: {
-      code: 4011,
-      message: 'App is disabled'
+      code: 4021,
+      message: 'App is disabled.'
     },
     serverInternalError: {
       code: 4100,
-      message: 'Server internal error, please try again later',
+      message: 'Server internal error, please try again later.',
       reconnectStrategy: 'static',
       reconnectIn: 1 * 60 * 1000
     },
     serverMaintenance: {
       code: 4101,
-      message: 'Server is under maintenance, please try again later',
+      message: 'Server is under maintenance, please try again later.',
       reconnectStrategy: 'backoff',
       reconnectIn: 10 * 1000,
       reconnectInMax: 5 * 60 * 1000
     },
     serverOverCapacity: {
       code: 4102,
-      message: 'Server is over capacity, please try again later',
+      message: 'Server is over capacity, please try again later.',
       reconnectStrategy: 'backoff',
       reconnectIn: 10 * 1000,
       reconnectInMax: 5 * 60 * 1000
     },
-    appOverQuota: {
-      code: 4111,
-      message: 'App is over connection quota, please try again later',
+    appOverConnectionQuota: {
+      code: 4110,
+      message: 'App is over connection quota, please try again later.',
+      reconnectStrategy: 'static',
       reconnectIn: 10 * 60 * 1000
     }
   };
 
-  Protocol._validateEvent = function(event) {};
+
+  /**
+   * 4500 ~ 4999
+   */
+
+  Protocol.responseErrors = {
+    noConnection: {
+      code: 4500,
+      message: 'Connection is not available, please check your network configuration.'
+    },
+    serverInternalError: {
+      code: 4501,
+      message: 'Server internal error, please try again later.'
+    },
+    incorrectSignature: {
+      code: 4502,
+      message: 'Incorrect signature.'
+    },
+    unauthorized: {
+      code: 4503,
+      message: 'Unauthorized, please login first.'
+    },
+    invalidRequest: {
+      code: 4504,
+      message: 'Invalid request.'
+    },
+    permissionDenied: {
+      code: 4505,
+      message: 'Permission denied.'
+    }
+  };
+
+  Protocol._throwError = function(err) {
+    throw err;
+  };
+
+  Protocol._validateEvent = function(event, restrictDataSize) {
+    var eventDataSize;
+    if (!(event.id && event.name)) {
+      this._throwError(this.connErrors.eventInvalid);
+    }
+    if (event.name.length > this.eventNameMaxLength) {
+      this._throwError(this.connErrors.eventNameTooLong);
+    }
+    if (!restrictDataSize) {
+      return;
+    }
+    eventDataSize = Buffer.byteLength(JSON.stringify(event.data), 'utf8');
+    if (eventDataSize > this.eventDataMaxSize) {
+      return this._throwError(this.connErrors.eventDataTooBig);
+    }
+  };
 
   Protocol.decodeEvent = function(event) {
     var err;
@@ -1034,19 +1656,50 @@ Protocol = (function() {
       event = JSON.parse(event);
     } catch (_error) {
       err = _error;
-      throw {
-        type: 'EventDecodeError',
-        error: err,
-        data: event
-      };
+      this._throwError(this.connErrors.eventInvalid);
     }
     this._validateEvent(event);
     return event;
   };
 
-  Protocol.encodeEvent = function(event) {
-    this._validateEvent(event);
+  Protocol.encodeEvent = function(event, restrictDataSize) {
+    if (restrictDataSize == null) {
+      restrictDataSize = true;
+    }
+    this._validateEvent(event, restrictDataSize);
     return JSON.stringify(event);
+  };
+
+  Protocol.validateChannel = function(name) {
+    var type;
+    if (!name) {
+      this._throwError(new Error('Channel name is required.'));
+    }
+    if (!this.channelNamePattern.test(name)) {
+      this._throwError(new Error('Channel name contains invalid character.'));
+    }
+    if (name.length > this.channelNameMaxLength) {
+      this._throwError(new Error('Channel name is too long.'));
+    }
+    type = 'channel';
+    if (this.privateChannelNameFullPattern.test(name)) {
+      type = 'privateChannel';
+    } else if (this.presenceChannelNameFullPattern.test(name)) {
+      type = 'presenceChannel';
+    }
+    return type;
+  };
+
+  Protocol.validatePresenceChannelUser = function(existingUserIds, user) {
+    var uniqueUserIds, userInfoSize, _ref;
+    uniqueUserIds = _.unique(existingUserIds);
+    if (uniqueUserIds.length >= this.presenceChannelUserMaxCount && (_ref = user.userId, __indexOf.call(uniqueUserIds, _ref) < 0)) {
+      this._throwError(new Error('Exceeds max presence channel user count.'));
+    }
+    userInfoSize = Buffer.byteLength(JSON.stringify(user.userInfo), 'utf8');
+    if (userInfoSize > this.presenceChannelUserInfoMaxSize) {
+      return this._throwError(new Error('Exceeds max user info size.'));
+    }
   };
 
   return Protocol;
@@ -1057,7 +1710,8 @@ module.exports = Protocol;
 
 
 
-},{}],14:[function(require,module,exports){
+}).call(this,require("buffer").Buffer)
+},{"buffer":52}],19:[function(require,module,exports){
 
 /**
  * This is the web browser implementation of `debug()`.
@@ -1192,7 +1846,7 @@ function load() {
 
 exports.enable(load());
 
-},{"./debug":15}],15:[function(require,module,exports){
+},{"./debug":20}],20:[function(require,module,exports){
 
 /**
  * This is the common logic for both the Node.js and web browser
@@ -1387,7 +2041,7 @@ function coerce(val) {
   return val;
 }
 
-},{"ms":16}],16:[function(require,module,exports){
+},{"ms":21}],21:[function(require,module,exports){
 /**
  * Helpers.
  */
@@ -1500,11 +2154,11 @@ function plural(ms, n, name) {
   return Math.ceil(ms / n) + ' ' + name + 's';
 }
 
-},{}],17:[function(require,module,exports){
+},{}],22:[function(require,module,exports){
 
 module.exports =  require('./lib/');
 
-},{"./lib/":18}],18:[function(require,module,exports){
+},{"./lib/":23}],23:[function(require,module,exports){
 
 module.exports = require('./socket');
 
@@ -1516,7 +2170,7 @@ module.exports = require('./socket');
  */
 module.exports.parser = require('engine.io-parser');
 
-},{"./socket":19,"engine.io-parser":32}],19:[function(require,module,exports){
+},{"./socket":24,"engine.io-parser":37}],24:[function(require,module,exports){
 (function (global){
 /**
  * Module dependencies.
@@ -2203,7 +2857,7 @@ Socket.prototype.filterUpgrades = function (upgrades) {
 };
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"./transport":20,"./transports":21,"component-emitter":27,"debug":29,"engine.io-parser":32,"indexof":41,"parsejson":42,"parseqs":43,"parseuri":44}],20:[function(require,module,exports){
+},{"./transport":25,"./transports":26,"component-emitter":32,"debug":34,"engine.io-parser":37,"indexof":46,"parsejson":47,"parseqs":48,"parseuri":49}],25:[function(require,module,exports){
 /**
  * Module dependencies.
  */
@@ -2355,7 +3009,7 @@ Transport.prototype.onClose = function () {
   this.emit('close');
 };
 
-},{"component-emitter":27,"engine.io-parser":32}],21:[function(require,module,exports){
+},{"component-emitter":32,"engine.io-parser":37}],26:[function(require,module,exports){
 (function (global){
 /**
  * Module dependencies
@@ -2412,7 +3066,7 @@ function polling(opts){
 }
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"./polling-jsonp":22,"./polling-xhr":23,"./websocket":25,"xmlhttprequest":26}],22:[function(require,module,exports){
+},{"./polling-jsonp":27,"./polling-xhr":28,"./websocket":30,"xmlhttprequest":31}],27:[function(require,module,exports){
 (function (global){
 
 /**
@@ -2649,7 +3303,7 @@ JSONPPolling.prototype.doWrite = function (data, fn) {
 };
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"./polling":24,"component-inherit":28}],23:[function(require,module,exports){
+},{"./polling":29,"component-inherit":33}],28:[function(require,module,exports){
 (function (global){
 /**
  * Module requirements.
@@ -3004,7 +3658,7 @@ function unloadHandler() {
 }
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"./polling":24,"component-emitter":27,"component-inherit":28,"debug":29,"xmlhttprequest":26}],24:[function(require,module,exports){
+},{"./polling":29,"component-emitter":32,"component-inherit":33,"debug":34,"xmlhttprequest":31}],29:[function(require,module,exports){
 /**
  * Module dependencies.
  */
@@ -3251,7 +3905,7 @@ Polling.prototype.uri = function(){
   return schema + '://' + this.hostname + port + this.path + query;
 };
 
-},{"../transport":20,"component-inherit":28,"debug":29,"engine.io-parser":32,"parseqs":43,"xmlhttprequest":26}],25:[function(require,module,exports){
+},{"../transport":25,"component-inherit":33,"debug":34,"engine.io-parser":37,"parseqs":48,"xmlhttprequest":31}],30:[function(require,module,exports){
 /**
  * Module dependencies.
  */
@@ -3482,7 +4136,7 @@ WS.prototype.check = function(){
   return !!WebSocket && !('__initialize' in WebSocket && this.name === WS.prototype.name);
 };
 
-},{"../transport":20,"component-inherit":28,"debug":29,"engine.io-parser":32,"parseqs":43,"ws":45}],26:[function(require,module,exports){
+},{"../transport":25,"component-inherit":33,"debug":34,"engine.io-parser":37,"parseqs":48,"ws":50}],31:[function(require,module,exports){
 // browser shim for xmlhttprequest module
 var hasCORS = require('has-cors');
 
@@ -3520,7 +4174,7 @@ module.exports = function(opts) {
   }
 }
 
-},{"has-cors":39}],27:[function(require,module,exports){
+},{"has-cors":44}],32:[function(require,module,exports){
 
 /**
  * Expose `Emitter`.
@@ -3686,7 +4340,7 @@ Emitter.prototype.hasListeners = function(event){
   return !! this.listeners(event).length;
 };
 
-},{}],28:[function(require,module,exports){
+},{}],33:[function(require,module,exports){
 
 module.exports = function(a, b){
   var fn = function(){};
@@ -3694,7 +4348,7 @@ module.exports = function(a, b){
   a.prototype = new fn;
   a.prototype.constructor = a;
 };
-},{}],29:[function(require,module,exports){
+},{}],34:[function(require,module,exports){
 
 /**
  * This is the web browser implementation of `debug()`.
@@ -3843,7 +4497,7 @@ function load() {
 
 exports.enable(load());
 
-},{"./debug":30}],30:[function(require,module,exports){
+},{"./debug":35}],35:[function(require,module,exports){
 
 /**
  * This is the common logic for both the Node.js and web browser
@@ -4042,9 +4696,9 @@ function coerce(val) {
   return val;
 }
 
-},{"ms":31}],31:[function(require,module,exports){
-module.exports=require(16)
-},{"/root/wp/tuisongbao/node_modules/debug/node_modules/ms/index.js":16}],32:[function(require,module,exports){
+},{"ms":36}],36:[function(require,module,exports){
+module.exports=require(21)
+},{"/root/wp/server/node_modules/debug/node_modules/ms/index.js":21}],37:[function(require,module,exports){
 (function (global){
 /**
  * Module dependencies.
@@ -4614,7 +5268,7 @@ exports.decodePayloadAsBinary = function (data, binaryType, callback) {
 };
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"./keys":33,"after":34,"arraybuffer.slice":35,"base64-arraybuffer":36,"blob":37,"utf8":38}],33:[function(require,module,exports){
+},{"./keys":38,"after":39,"arraybuffer.slice":40,"base64-arraybuffer":41,"blob":42,"utf8":43}],38:[function(require,module,exports){
 
 /**
  * Gets the keys for an object.
@@ -4635,7 +5289,7 @@ module.exports = Object.keys || function keys (obj){
   return arr;
 };
 
-},{}],34:[function(require,module,exports){
+},{}],39:[function(require,module,exports){
 module.exports = after
 
 function after(count, callback, err_cb) {
@@ -4665,7 +5319,7 @@ function after(count, callback, err_cb) {
 
 function noop() {}
 
-},{}],35:[function(require,module,exports){
+},{}],40:[function(require,module,exports){
 /**
  * An abstraction for slicing an arraybuffer even when
  * ArrayBuffer.prototype.slice is not supported
@@ -4696,7 +5350,7 @@ module.exports = function(arraybuffer, start, end) {
   return result.buffer;
 };
 
-},{}],36:[function(require,module,exports){
+},{}],41:[function(require,module,exports){
 /*
  * base64-arraybuffer
  * https://github.com/niklasvh/base64-arraybuffer
@@ -4757,7 +5411,7 @@ module.exports = function(arraybuffer, start, end) {
   };
 })("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/");
 
-},{}],37:[function(require,module,exports){
+},{}],42:[function(require,module,exports){
 (function (global){
 /**
  * Create a blob builder even when vendor prefixes exist
@@ -4810,7 +5464,7 @@ module.exports = (function() {
 })();
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{}],38:[function(require,module,exports){
+},{}],43:[function(require,module,exports){
 (function (global){
 /*! http://mths.be/utf8js v2.0.0 by @mathias */
 ;(function(root) {
@@ -5053,7 +5707,7 @@ module.exports = (function() {
 }(this));
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{}],39:[function(require,module,exports){
+},{}],44:[function(require,module,exports){
 
 /**
  * Module dependencies.
@@ -5078,7 +5732,7 @@ try {
   module.exports = false;
 }
 
-},{"global":40}],40:[function(require,module,exports){
+},{"global":45}],45:[function(require,module,exports){
 
 /**
  * Returns `this`. Execute this without a "context" (i.e. without it being
@@ -5088,7 +5742,7 @@ try {
 
 module.exports = (function () { return this; })();
 
-},{}],41:[function(require,module,exports){
+},{}],46:[function(require,module,exports){
 
 var indexOf = [].indexOf;
 
@@ -5099,7 +5753,7 @@ module.exports = function(arr, obj){
   }
   return -1;
 };
-},{}],42:[function(require,module,exports){
+},{}],47:[function(require,module,exports){
 (function (global){
 /**
  * JSON parse.
@@ -5134,7 +5788,7 @@ module.exports = function parsejson(data) {
   }
 };
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{}],43:[function(require,module,exports){
+},{}],48:[function(require,module,exports){
 /**
  * Compiles a querystring
  * Returns string representation of the object
@@ -5173,7 +5827,7 @@ exports.decode = function(qs){
   return qry;
 };
 
-},{}],44:[function(require,module,exports){
+},{}],49:[function(require,module,exports){
 /**
  * Parses an URI
  *
@@ -5214,7 +5868,7 @@ module.exports = function parseuri(str) {
     return uri;
 };
 
-},{}],45:[function(require,module,exports){
+},{}],50:[function(require,module,exports){
 
 /**
  * Module dependencies.
@@ -5259,7 +5913,1306 @@ function ws(uri, protocols, opts) {
 
 if (WebSocket) ws.prototype = WebSocket.prototype;
 
-},{}],46:[function(require,module,exports){
+},{}],51:[function(require,module,exports){
+
+},{}],52:[function(require,module,exports){
+/*!
+ * The buffer module from node.js, for the browser.
+ *
+ * @author   Feross Aboukhadijeh <feross@feross.org> <http://feross.org>
+ * @license  MIT
+ */
+
+var base64 = require('base64-js')
+var ieee754 = require('ieee754')
+var isArray = require('is-array')
+
+exports.Buffer = Buffer
+exports.SlowBuffer = Buffer
+exports.INSPECT_MAX_BYTES = 50
+Buffer.poolSize = 8192 // not used by this implementation
+
+var kMaxLength = 0x3fffffff
+
+/**
+ * If `Buffer.TYPED_ARRAY_SUPPORT`:
+ *   === true    Use Uint8Array implementation (fastest)
+ *   === false   Use Object implementation (most compatible, even IE6)
+ *
+ * Browsers that support typed arrays are IE 10+, Firefox 4+, Chrome 7+, Safari 5.1+,
+ * Opera 11.6+, iOS 4.2+.
+ *
+ * Note:
+ *
+ * - Implementation must support adding new properties to `Uint8Array` instances.
+ *   Firefox 4-29 lacked support, fixed in Firefox 30+.
+ *   See: https://bugzilla.mozilla.org/show_bug.cgi?id=695438.
+ *
+ *  - Chrome 9-10 is missing the `TypedArray.prototype.subarray` function.
+ *
+ *  - IE10 has a broken `TypedArray.prototype.subarray` function which returns arrays of
+ *    incorrect length in some situations.
+ *
+ * We detect these buggy browsers and set `Buffer.TYPED_ARRAY_SUPPORT` to `false` so they will
+ * get the Object implementation, which is slower but will work correctly.
+ */
+Buffer.TYPED_ARRAY_SUPPORT = (function () {
+  try {
+    var buf = new ArrayBuffer(0)
+    var arr = new Uint8Array(buf)
+    arr.foo = function () { return 42 }
+    return 42 === arr.foo() && // typed array instances can be augmented
+        typeof arr.subarray === 'function' && // chrome 9-10 lack `subarray`
+        new Uint8Array(1).subarray(1, 1).byteLength === 0 // ie10 has broken `subarray`
+  } catch (e) {
+    return false
+  }
+})()
+
+/**
+ * Class: Buffer
+ * =============
+ *
+ * The Buffer constructor returns instances of `Uint8Array` that are augmented
+ * with function properties for all the node `Buffer` API functions. We use
+ * `Uint8Array` so that square bracket notation works as expected -- it returns
+ * a single octet.
+ *
+ * By augmenting the instances, we can avoid modifying the `Uint8Array`
+ * prototype.
+ */
+function Buffer (subject, encoding, noZero) {
+  if (!(this instanceof Buffer))
+    return new Buffer(subject, encoding, noZero)
+
+  var type = typeof subject
+
+  // Find the length
+  var length
+  if (type === 'number')
+    length = subject > 0 ? subject >>> 0 : 0
+  else if (type === 'string') {
+    if (encoding === 'base64')
+      subject = base64clean(subject)
+    length = Buffer.byteLength(subject, encoding)
+  } else if (type === 'object' && subject !== null) { // assume object is array-like
+    if (subject.type === 'Buffer' && isArray(subject.data))
+      subject = subject.data
+    length = +subject.length > 0 ? Math.floor(+subject.length) : 0
+  } else
+    throw new TypeError('must start with number, buffer, array or string')
+
+  if (this.length > kMaxLength)
+    throw new RangeError('Attempt to allocate Buffer larger than maximum ' +
+      'size: 0x' + kMaxLength.toString(16) + ' bytes')
+
+  var buf
+  if (Buffer.TYPED_ARRAY_SUPPORT) {
+    // Preferred: Return an augmented `Uint8Array` instance for best performance
+    buf = Buffer._augment(new Uint8Array(length))
+  } else {
+    // Fallback: Return THIS instance of Buffer (created by `new`)
+    buf = this
+    buf.length = length
+    buf._isBuffer = true
+  }
+
+  var i
+  if (Buffer.TYPED_ARRAY_SUPPORT && typeof subject.byteLength === 'number') {
+    // Speed optimization -- use set if we're copying from a typed array
+    buf._set(subject)
+  } else if (isArrayish(subject)) {
+    // Treat array-ish objects as a byte array
+    if (Buffer.isBuffer(subject)) {
+      for (i = 0; i < length; i++)
+        buf[i] = subject.readUInt8(i)
+    } else {
+      for (i = 0; i < length; i++)
+        buf[i] = ((subject[i] % 256) + 256) % 256
+    }
+  } else if (type === 'string') {
+    buf.write(subject, 0, encoding)
+  } else if (type === 'number' && !Buffer.TYPED_ARRAY_SUPPORT && !noZero) {
+    for (i = 0; i < length; i++) {
+      buf[i] = 0
+    }
+  }
+
+  return buf
+}
+
+Buffer.isBuffer = function (b) {
+  return !!(b != null && b._isBuffer)
+}
+
+Buffer.compare = function (a, b) {
+  if (!Buffer.isBuffer(a) || !Buffer.isBuffer(b))
+    throw new TypeError('Arguments must be Buffers')
+
+  var x = a.length
+  var y = b.length
+  for (var i = 0, len = Math.min(x, y); i < len && a[i] === b[i]; i++) {}
+  if (i !== len) {
+    x = a[i]
+    y = b[i]
+  }
+  if (x < y) return -1
+  if (y < x) return 1
+  return 0
+}
+
+Buffer.isEncoding = function (encoding) {
+  switch (String(encoding).toLowerCase()) {
+    case 'hex':
+    case 'utf8':
+    case 'utf-8':
+    case 'ascii':
+    case 'binary':
+    case 'base64':
+    case 'raw':
+    case 'ucs2':
+    case 'ucs-2':
+    case 'utf16le':
+    case 'utf-16le':
+      return true
+    default:
+      return false
+  }
+}
+
+Buffer.concat = function (list, totalLength) {
+  if (!isArray(list)) throw new TypeError('Usage: Buffer.concat(list[, length])')
+
+  if (list.length === 0) {
+    return new Buffer(0)
+  } else if (list.length === 1) {
+    return list[0]
+  }
+
+  var i
+  if (totalLength === undefined) {
+    totalLength = 0
+    for (i = 0; i < list.length; i++) {
+      totalLength += list[i].length
+    }
+  }
+
+  var buf = new Buffer(totalLength)
+  var pos = 0
+  for (i = 0; i < list.length; i++) {
+    var item = list[i]
+    item.copy(buf, pos)
+    pos += item.length
+  }
+  return buf
+}
+
+Buffer.byteLength = function (str, encoding) {
+  var ret
+  str = str + ''
+  switch (encoding || 'utf8') {
+    case 'ascii':
+    case 'binary':
+    case 'raw':
+      ret = str.length
+      break
+    case 'ucs2':
+    case 'ucs-2':
+    case 'utf16le':
+    case 'utf-16le':
+      ret = str.length * 2
+      break
+    case 'hex':
+      ret = str.length >>> 1
+      break
+    case 'utf8':
+    case 'utf-8':
+      ret = utf8ToBytes(str).length
+      break
+    case 'base64':
+      ret = base64ToBytes(str).length
+      break
+    default:
+      ret = str.length
+  }
+  return ret
+}
+
+// pre-set for values that may exist in the future
+Buffer.prototype.length = undefined
+Buffer.prototype.parent = undefined
+
+// toString(encoding, start=0, end=buffer.length)
+Buffer.prototype.toString = function (encoding, start, end) {
+  var loweredCase = false
+
+  start = start >>> 0
+  end = end === undefined || end === Infinity ? this.length : end >>> 0
+
+  if (!encoding) encoding = 'utf8'
+  if (start < 0) start = 0
+  if (end > this.length) end = this.length
+  if (end <= start) return ''
+
+  while (true) {
+    switch (encoding) {
+      case 'hex':
+        return hexSlice(this, start, end)
+
+      case 'utf8':
+      case 'utf-8':
+        return utf8Slice(this, start, end)
+
+      case 'ascii':
+        return asciiSlice(this, start, end)
+
+      case 'binary':
+        return binarySlice(this, start, end)
+
+      case 'base64':
+        return base64Slice(this, start, end)
+
+      case 'ucs2':
+      case 'ucs-2':
+      case 'utf16le':
+      case 'utf-16le':
+        return utf16leSlice(this, start, end)
+
+      default:
+        if (loweredCase)
+          throw new TypeError('Unknown encoding: ' + encoding)
+        encoding = (encoding + '').toLowerCase()
+        loweredCase = true
+    }
+  }
+}
+
+Buffer.prototype.equals = function (b) {
+  if(!Buffer.isBuffer(b)) throw new TypeError('Argument must be a Buffer')
+  return Buffer.compare(this, b) === 0
+}
+
+Buffer.prototype.inspect = function () {
+  var str = ''
+  var max = exports.INSPECT_MAX_BYTES
+  if (this.length > 0) {
+    str = this.toString('hex', 0, max).match(/.{2}/g).join(' ')
+    if (this.length > max)
+      str += ' ... '
+  }
+  return '<Buffer ' + str + '>'
+}
+
+Buffer.prototype.compare = function (b) {
+  if (!Buffer.isBuffer(b)) throw new TypeError('Argument must be a Buffer')
+  return Buffer.compare(this, b)
+}
+
+// `get` will be removed in Node 0.13+
+Buffer.prototype.get = function (offset) {
+  console.log('.get() is deprecated. Access using array indexes instead.')
+  return this.readUInt8(offset)
+}
+
+// `set` will be removed in Node 0.13+
+Buffer.prototype.set = function (v, offset) {
+  console.log('.set() is deprecated. Access using array indexes instead.')
+  return this.writeUInt8(v, offset)
+}
+
+function hexWrite (buf, string, offset, length) {
+  offset = Number(offset) || 0
+  var remaining = buf.length - offset
+  if (!length) {
+    length = remaining
+  } else {
+    length = Number(length)
+    if (length > remaining) {
+      length = remaining
+    }
+  }
+
+  // must be an even number of digits
+  var strLen = string.length
+  if (strLen % 2 !== 0) throw new Error('Invalid hex string')
+
+  if (length > strLen / 2) {
+    length = strLen / 2
+  }
+  for (var i = 0; i < length; i++) {
+    var byte = parseInt(string.substr(i * 2, 2), 16)
+    if (isNaN(byte)) throw new Error('Invalid hex string')
+    buf[offset + i] = byte
+  }
+  return i
+}
+
+function utf8Write (buf, string, offset, length) {
+  var charsWritten = blitBuffer(utf8ToBytes(string), buf, offset, length)
+  return charsWritten
+}
+
+function asciiWrite (buf, string, offset, length) {
+  var charsWritten = blitBuffer(asciiToBytes(string), buf, offset, length)
+  return charsWritten
+}
+
+function binaryWrite (buf, string, offset, length) {
+  return asciiWrite(buf, string, offset, length)
+}
+
+function base64Write (buf, string, offset, length) {
+  var charsWritten = blitBuffer(base64ToBytes(string), buf, offset, length)
+  return charsWritten
+}
+
+function utf16leWrite (buf, string, offset, length) {
+  var charsWritten = blitBuffer(utf16leToBytes(string), buf, offset, length, 2)
+  return charsWritten
+}
+
+Buffer.prototype.write = function (string, offset, length, encoding) {
+  // Support both (string, offset, length, encoding)
+  // and the legacy (string, encoding, offset, length)
+  if (isFinite(offset)) {
+    if (!isFinite(length)) {
+      encoding = length
+      length = undefined
+    }
+  } else {  // legacy
+    var swap = encoding
+    encoding = offset
+    offset = length
+    length = swap
+  }
+
+  offset = Number(offset) || 0
+  var remaining = this.length - offset
+  if (!length) {
+    length = remaining
+  } else {
+    length = Number(length)
+    if (length > remaining) {
+      length = remaining
+    }
+  }
+  encoding = String(encoding || 'utf8').toLowerCase()
+
+  var ret
+  switch (encoding) {
+    case 'hex':
+      ret = hexWrite(this, string, offset, length)
+      break
+    case 'utf8':
+    case 'utf-8':
+      ret = utf8Write(this, string, offset, length)
+      break
+    case 'ascii':
+      ret = asciiWrite(this, string, offset, length)
+      break
+    case 'binary':
+      ret = binaryWrite(this, string, offset, length)
+      break
+    case 'base64':
+      ret = base64Write(this, string, offset, length)
+      break
+    case 'ucs2':
+    case 'ucs-2':
+    case 'utf16le':
+    case 'utf-16le':
+      ret = utf16leWrite(this, string, offset, length)
+      break
+    default:
+      throw new TypeError('Unknown encoding: ' + encoding)
+  }
+  return ret
+}
+
+Buffer.prototype.toJSON = function () {
+  return {
+    type: 'Buffer',
+    data: Array.prototype.slice.call(this._arr || this, 0)
+  }
+}
+
+function base64Slice (buf, start, end) {
+  if (start === 0 && end === buf.length) {
+    return base64.fromByteArray(buf)
+  } else {
+    return base64.fromByteArray(buf.slice(start, end))
+  }
+}
+
+function utf8Slice (buf, start, end) {
+  var res = ''
+  var tmp = ''
+  end = Math.min(buf.length, end)
+
+  for (var i = start; i < end; i++) {
+    if (buf[i] <= 0x7F) {
+      res += decodeUtf8Char(tmp) + String.fromCharCode(buf[i])
+      tmp = ''
+    } else {
+      tmp += '%' + buf[i].toString(16)
+    }
+  }
+
+  return res + decodeUtf8Char(tmp)
+}
+
+function asciiSlice (buf, start, end) {
+  var ret = ''
+  end = Math.min(buf.length, end)
+
+  for (var i = start; i < end; i++) {
+    ret += String.fromCharCode(buf[i])
+  }
+  return ret
+}
+
+function binarySlice (buf, start, end) {
+  return asciiSlice(buf, start, end)
+}
+
+function hexSlice (buf, start, end) {
+  var len = buf.length
+
+  if (!start || start < 0) start = 0
+  if (!end || end < 0 || end > len) end = len
+
+  var out = ''
+  for (var i = start; i < end; i++) {
+    out += toHex(buf[i])
+  }
+  return out
+}
+
+function utf16leSlice (buf, start, end) {
+  var bytes = buf.slice(start, end)
+  var res = ''
+  for (var i = 0; i < bytes.length; i += 2) {
+    res += String.fromCharCode(bytes[i] + bytes[i + 1] * 256)
+  }
+  return res
+}
+
+Buffer.prototype.slice = function (start, end) {
+  var len = this.length
+  start = ~~start
+  end = end === undefined ? len : ~~end
+
+  if (start < 0) {
+    start += len;
+    if (start < 0)
+      start = 0
+  } else if (start > len) {
+    start = len
+  }
+
+  if (end < 0) {
+    end += len
+    if (end < 0)
+      end = 0
+  } else if (end > len) {
+    end = len
+  }
+
+  if (end < start)
+    end = start
+
+  if (Buffer.TYPED_ARRAY_SUPPORT) {
+    return Buffer._augment(this.subarray(start, end))
+  } else {
+    var sliceLen = end - start
+    var newBuf = new Buffer(sliceLen, undefined, true)
+    for (var i = 0; i < sliceLen; i++) {
+      newBuf[i] = this[i + start]
+    }
+    return newBuf
+  }
+}
+
+/*
+ * Need to make sure that buffer isn't trying to write out of bounds.
+ */
+function checkOffset (offset, ext, length) {
+  if ((offset % 1) !== 0 || offset < 0)
+    throw new RangeError('offset is not uint')
+  if (offset + ext > length)
+    throw new RangeError('Trying to access beyond buffer length')
+}
+
+Buffer.prototype.readUInt8 = function (offset, noAssert) {
+  if (!noAssert)
+    checkOffset(offset, 1, this.length)
+  return this[offset]
+}
+
+Buffer.prototype.readUInt16LE = function (offset, noAssert) {
+  if (!noAssert)
+    checkOffset(offset, 2, this.length)
+  return this[offset] | (this[offset + 1] << 8)
+}
+
+Buffer.prototype.readUInt16BE = function (offset, noAssert) {
+  if (!noAssert)
+    checkOffset(offset, 2, this.length)
+  return (this[offset] << 8) | this[offset + 1]
+}
+
+Buffer.prototype.readUInt32LE = function (offset, noAssert) {
+  if (!noAssert)
+    checkOffset(offset, 4, this.length)
+
+  return ((this[offset]) |
+      (this[offset + 1] << 8) |
+      (this[offset + 2] << 16)) +
+      (this[offset + 3] * 0x1000000)
+}
+
+Buffer.prototype.readUInt32BE = function (offset, noAssert) {
+  if (!noAssert)
+    checkOffset(offset, 4, this.length)
+
+  return (this[offset] * 0x1000000) +
+      ((this[offset + 1] << 16) |
+      (this[offset + 2] << 8) |
+      this[offset + 3])
+}
+
+Buffer.prototype.readInt8 = function (offset, noAssert) {
+  if (!noAssert)
+    checkOffset(offset, 1, this.length)
+  if (!(this[offset] & 0x80))
+    return (this[offset])
+  return ((0xff - this[offset] + 1) * -1)
+}
+
+Buffer.prototype.readInt16LE = function (offset, noAssert) {
+  if (!noAssert)
+    checkOffset(offset, 2, this.length)
+  var val = this[offset] | (this[offset + 1] << 8)
+  return (val & 0x8000) ? val | 0xFFFF0000 : val
+}
+
+Buffer.prototype.readInt16BE = function (offset, noAssert) {
+  if (!noAssert)
+    checkOffset(offset, 2, this.length)
+  var val = this[offset + 1] | (this[offset] << 8)
+  return (val & 0x8000) ? val | 0xFFFF0000 : val
+}
+
+Buffer.prototype.readInt32LE = function (offset, noAssert) {
+  if (!noAssert)
+    checkOffset(offset, 4, this.length)
+
+  return (this[offset]) |
+      (this[offset + 1] << 8) |
+      (this[offset + 2] << 16) |
+      (this[offset + 3] << 24)
+}
+
+Buffer.prototype.readInt32BE = function (offset, noAssert) {
+  if (!noAssert)
+    checkOffset(offset, 4, this.length)
+
+  return (this[offset] << 24) |
+      (this[offset + 1] << 16) |
+      (this[offset + 2] << 8) |
+      (this[offset + 3])
+}
+
+Buffer.prototype.readFloatLE = function (offset, noAssert) {
+  if (!noAssert)
+    checkOffset(offset, 4, this.length)
+  return ieee754.read(this, offset, true, 23, 4)
+}
+
+Buffer.prototype.readFloatBE = function (offset, noAssert) {
+  if (!noAssert)
+    checkOffset(offset, 4, this.length)
+  return ieee754.read(this, offset, false, 23, 4)
+}
+
+Buffer.prototype.readDoubleLE = function (offset, noAssert) {
+  if (!noAssert)
+    checkOffset(offset, 8, this.length)
+  return ieee754.read(this, offset, true, 52, 8)
+}
+
+Buffer.prototype.readDoubleBE = function (offset, noAssert) {
+  if (!noAssert)
+    checkOffset(offset, 8, this.length)
+  return ieee754.read(this, offset, false, 52, 8)
+}
+
+function checkInt (buf, value, offset, ext, max, min) {
+  if (!Buffer.isBuffer(buf)) throw new TypeError('buffer must be a Buffer instance')
+  if (value > max || value < min) throw new TypeError('value is out of bounds')
+  if (offset + ext > buf.length) throw new TypeError('index out of range')
+}
+
+Buffer.prototype.writeUInt8 = function (value, offset, noAssert) {
+  value = +value
+  offset = offset >>> 0
+  if (!noAssert)
+    checkInt(this, value, offset, 1, 0xff, 0)
+  if (!Buffer.TYPED_ARRAY_SUPPORT) value = Math.floor(value)
+  this[offset] = value
+  return offset + 1
+}
+
+function objectWriteUInt16 (buf, value, offset, littleEndian) {
+  if (value < 0) value = 0xffff + value + 1
+  for (var i = 0, j = Math.min(buf.length - offset, 2); i < j; i++) {
+    buf[offset + i] = (value & (0xff << (8 * (littleEndian ? i : 1 - i)))) >>>
+      (littleEndian ? i : 1 - i) * 8
+  }
+}
+
+Buffer.prototype.writeUInt16LE = function (value, offset, noAssert) {
+  value = +value
+  offset = offset >>> 0
+  if (!noAssert)
+    checkInt(this, value, offset, 2, 0xffff, 0)
+  if (Buffer.TYPED_ARRAY_SUPPORT) {
+    this[offset] = value
+    this[offset + 1] = (value >>> 8)
+  } else objectWriteUInt16(this, value, offset, true)
+  return offset + 2
+}
+
+Buffer.prototype.writeUInt16BE = function (value, offset, noAssert) {
+  value = +value
+  offset = offset >>> 0
+  if (!noAssert)
+    checkInt(this, value, offset, 2, 0xffff, 0)
+  if (Buffer.TYPED_ARRAY_SUPPORT) {
+    this[offset] = (value >>> 8)
+    this[offset + 1] = value
+  } else objectWriteUInt16(this, value, offset, false)
+  return offset + 2
+}
+
+function objectWriteUInt32 (buf, value, offset, littleEndian) {
+  if (value < 0) value = 0xffffffff + value + 1
+  for (var i = 0, j = Math.min(buf.length - offset, 4); i < j; i++) {
+    buf[offset + i] = (value >>> (littleEndian ? i : 3 - i) * 8) & 0xff
+  }
+}
+
+Buffer.prototype.writeUInt32LE = function (value, offset, noAssert) {
+  value = +value
+  offset = offset >>> 0
+  if (!noAssert)
+    checkInt(this, value, offset, 4, 0xffffffff, 0)
+  if (Buffer.TYPED_ARRAY_SUPPORT) {
+    this[offset + 3] = (value >>> 24)
+    this[offset + 2] = (value >>> 16)
+    this[offset + 1] = (value >>> 8)
+    this[offset] = value
+  } else objectWriteUInt32(this, value, offset, true)
+  return offset + 4
+}
+
+Buffer.prototype.writeUInt32BE = function (value, offset, noAssert) {
+  value = +value
+  offset = offset >>> 0
+  if (!noAssert)
+    checkInt(this, value, offset, 4, 0xffffffff, 0)
+  if (Buffer.TYPED_ARRAY_SUPPORT) {
+    this[offset] = (value >>> 24)
+    this[offset + 1] = (value >>> 16)
+    this[offset + 2] = (value >>> 8)
+    this[offset + 3] = value
+  } else objectWriteUInt32(this, value, offset, false)
+  return offset + 4
+}
+
+Buffer.prototype.writeInt8 = function (value, offset, noAssert) {
+  value = +value
+  offset = offset >>> 0
+  if (!noAssert)
+    checkInt(this, value, offset, 1, 0x7f, -0x80)
+  if (!Buffer.TYPED_ARRAY_SUPPORT) value = Math.floor(value)
+  if (value < 0) value = 0xff + value + 1
+  this[offset] = value
+  return offset + 1
+}
+
+Buffer.prototype.writeInt16LE = function (value, offset, noAssert) {
+  value = +value
+  offset = offset >>> 0
+  if (!noAssert)
+    checkInt(this, value, offset, 2, 0x7fff, -0x8000)
+  if (Buffer.TYPED_ARRAY_SUPPORT) {
+    this[offset] = value
+    this[offset + 1] = (value >>> 8)
+  } else objectWriteUInt16(this, value, offset, true)
+  return offset + 2
+}
+
+Buffer.prototype.writeInt16BE = function (value, offset, noAssert) {
+  value = +value
+  offset = offset >>> 0
+  if (!noAssert)
+    checkInt(this, value, offset, 2, 0x7fff, -0x8000)
+  if (Buffer.TYPED_ARRAY_SUPPORT) {
+    this[offset] = (value >>> 8)
+    this[offset + 1] = value
+  } else objectWriteUInt16(this, value, offset, false)
+  return offset + 2
+}
+
+Buffer.prototype.writeInt32LE = function (value, offset, noAssert) {
+  value = +value
+  offset = offset >>> 0
+  if (!noAssert)
+    checkInt(this, value, offset, 4, 0x7fffffff, -0x80000000)
+  if (Buffer.TYPED_ARRAY_SUPPORT) {
+    this[offset] = value
+    this[offset + 1] = (value >>> 8)
+    this[offset + 2] = (value >>> 16)
+    this[offset + 3] = (value >>> 24)
+  } else objectWriteUInt32(this, value, offset, true)
+  return offset + 4
+}
+
+Buffer.prototype.writeInt32BE = function (value, offset, noAssert) {
+  value = +value
+  offset = offset >>> 0
+  if (!noAssert)
+    checkInt(this, value, offset, 4, 0x7fffffff, -0x80000000)
+  if (value < 0) value = 0xffffffff + value + 1
+  if (Buffer.TYPED_ARRAY_SUPPORT) {
+    this[offset] = (value >>> 24)
+    this[offset + 1] = (value >>> 16)
+    this[offset + 2] = (value >>> 8)
+    this[offset + 3] = value
+  } else objectWriteUInt32(this, value, offset, false)
+  return offset + 4
+}
+
+function checkIEEE754 (buf, value, offset, ext, max, min) {
+  if (value > max || value < min) throw new TypeError('value is out of bounds')
+  if (offset + ext > buf.length) throw new TypeError('index out of range')
+}
+
+function writeFloat (buf, value, offset, littleEndian, noAssert) {
+  if (!noAssert)
+    checkIEEE754(buf, value, offset, 4, 3.4028234663852886e+38, -3.4028234663852886e+38)
+  ieee754.write(buf, value, offset, littleEndian, 23, 4)
+  return offset + 4
+}
+
+Buffer.prototype.writeFloatLE = function (value, offset, noAssert) {
+  return writeFloat(this, value, offset, true, noAssert)
+}
+
+Buffer.prototype.writeFloatBE = function (value, offset, noAssert) {
+  return writeFloat(this, value, offset, false, noAssert)
+}
+
+function writeDouble (buf, value, offset, littleEndian, noAssert) {
+  if (!noAssert)
+    checkIEEE754(buf, value, offset, 8, 1.7976931348623157E+308, -1.7976931348623157E+308)
+  ieee754.write(buf, value, offset, littleEndian, 52, 8)
+  return offset + 8
+}
+
+Buffer.prototype.writeDoubleLE = function (value, offset, noAssert) {
+  return writeDouble(this, value, offset, true, noAssert)
+}
+
+Buffer.prototype.writeDoubleBE = function (value, offset, noAssert) {
+  return writeDouble(this, value, offset, false, noAssert)
+}
+
+// copy(targetBuffer, targetStart=0, sourceStart=0, sourceEnd=buffer.length)
+Buffer.prototype.copy = function (target, target_start, start, end) {
+  var source = this
+
+  if (!start) start = 0
+  if (!end && end !== 0) end = this.length
+  if (!target_start) target_start = 0
+
+  // Copy 0 bytes; we're done
+  if (end === start) return
+  if (target.length === 0 || source.length === 0) return
+
+  // Fatal error conditions
+  if (end < start) throw new TypeError('sourceEnd < sourceStart')
+  if (target_start < 0 || target_start >= target.length)
+    throw new TypeError('targetStart out of bounds')
+  if (start < 0 || start >= source.length) throw new TypeError('sourceStart out of bounds')
+  if (end < 0 || end > source.length) throw new TypeError('sourceEnd out of bounds')
+
+  // Are we oob?
+  if (end > this.length)
+    end = this.length
+  if (target.length - target_start < end - start)
+    end = target.length - target_start + start
+
+  var len = end - start
+
+  if (len < 1000 || !Buffer.TYPED_ARRAY_SUPPORT) {
+    for (var i = 0; i < len; i++) {
+      target[i + target_start] = this[i + start]
+    }
+  } else {
+    target._set(this.subarray(start, start + len), target_start)
+  }
+}
+
+// fill(value, start=0, end=buffer.length)
+Buffer.prototype.fill = function (value, start, end) {
+  if (!value) value = 0
+  if (!start) start = 0
+  if (!end) end = this.length
+
+  if (end < start) throw new TypeError('end < start')
+
+  // Fill 0 bytes; we're done
+  if (end === start) return
+  if (this.length === 0) return
+
+  if (start < 0 || start >= this.length) throw new TypeError('start out of bounds')
+  if (end < 0 || end > this.length) throw new TypeError('end out of bounds')
+
+  var i
+  if (typeof value === 'number') {
+    for (i = start; i < end; i++) {
+      this[i] = value
+    }
+  } else {
+    var bytes = utf8ToBytes(value.toString())
+    var len = bytes.length
+    for (i = start; i < end; i++) {
+      this[i] = bytes[i % len]
+    }
+  }
+
+  return this
+}
+
+/**
+ * Creates a new `ArrayBuffer` with the *copied* memory of the buffer instance.
+ * Added in Node 0.12. Only available in browsers that support ArrayBuffer.
+ */
+Buffer.prototype.toArrayBuffer = function () {
+  if (typeof Uint8Array !== 'undefined') {
+    if (Buffer.TYPED_ARRAY_SUPPORT) {
+      return (new Buffer(this)).buffer
+    } else {
+      var buf = new Uint8Array(this.length)
+      for (var i = 0, len = buf.length; i < len; i += 1) {
+        buf[i] = this[i]
+      }
+      return buf.buffer
+    }
+  } else {
+    throw new TypeError('Buffer.toArrayBuffer not supported in this browser')
+  }
+}
+
+// HELPER FUNCTIONS
+// ================
+
+var BP = Buffer.prototype
+
+/**
+ * Augment a Uint8Array *instance* (not the Uint8Array class!) with Buffer methods
+ */
+Buffer._augment = function (arr) {
+  arr.constructor = Buffer
+  arr._isBuffer = true
+
+  // save reference to original Uint8Array get/set methods before overwriting
+  arr._get = arr.get
+  arr._set = arr.set
+
+  // deprecated, will be removed in node 0.13+
+  arr.get = BP.get
+  arr.set = BP.set
+
+  arr.write = BP.write
+  arr.toString = BP.toString
+  arr.toLocaleString = BP.toString
+  arr.toJSON = BP.toJSON
+  arr.equals = BP.equals
+  arr.compare = BP.compare
+  arr.copy = BP.copy
+  arr.slice = BP.slice
+  arr.readUInt8 = BP.readUInt8
+  arr.readUInt16LE = BP.readUInt16LE
+  arr.readUInt16BE = BP.readUInt16BE
+  arr.readUInt32LE = BP.readUInt32LE
+  arr.readUInt32BE = BP.readUInt32BE
+  arr.readInt8 = BP.readInt8
+  arr.readInt16LE = BP.readInt16LE
+  arr.readInt16BE = BP.readInt16BE
+  arr.readInt32LE = BP.readInt32LE
+  arr.readInt32BE = BP.readInt32BE
+  arr.readFloatLE = BP.readFloatLE
+  arr.readFloatBE = BP.readFloatBE
+  arr.readDoubleLE = BP.readDoubleLE
+  arr.readDoubleBE = BP.readDoubleBE
+  arr.writeUInt8 = BP.writeUInt8
+  arr.writeUInt16LE = BP.writeUInt16LE
+  arr.writeUInt16BE = BP.writeUInt16BE
+  arr.writeUInt32LE = BP.writeUInt32LE
+  arr.writeUInt32BE = BP.writeUInt32BE
+  arr.writeInt8 = BP.writeInt8
+  arr.writeInt16LE = BP.writeInt16LE
+  arr.writeInt16BE = BP.writeInt16BE
+  arr.writeInt32LE = BP.writeInt32LE
+  arr.writeInt32BE = BP.writeInt32BE
+  arr.writeFloatLE = BP.writeFloatLE
+  arr.writeFloatBE = BP.writeFloatBE
+  arr.writeDoubleLE = BP.writeDoubleLE
+  arr.writeDoubleBE = BP.writeDoubleBE
+  arr.fill = BP.fill
+  arr.inspect = BP.inspect
+  arr.toArrayBuffer = BP.toArrayBuffer
+
+  return arr
+}
+
+var INVALID_BASE64_RE = /[^+\/0-9A-z]/g
+
+function base64clean (str) {
+  // Node strips out invalid characters like \n and \t from the string, base64-js does not
+  str = stringtrim(str).replace(INVALID_BASE64_RE, '')
+  // Node allows for non-padded base64 strings (missing trailing ===), base64-js does not
+  while (str.length % 4 !== 0) {
+    str = str + '='
+  }
+  return str
+}
+
+function stringtrim (str) {
+  if (str.trim) return str.trim()
+  return str.replace(/^\s+|\s+$/g, '')
+}
+
+function isArrayish (subject) {
+  return isArray(subject) || Buffer.isBuffer(subject) ||
+      subject && typeof subject === 'object' &&
+      typeof subject.length === 'number'
+}
+
+function toHex (n) {
+  if (n < 16) return '0' + n.toString(16)
+  return n.toString(16)
+}
+
+function utf8ToBytes (str) {
+  var byteArray = []
+  for (var i = 0; i < str.length; i++) {
+    var b = str.charCodeAt(i)
+    if (b <= 0x7F) {
+      byteArray.push(b)
+    } else {
+      var start = i
+      if (b >= 0xD800 && b <= 0xDFFF) i++
+      var h = encodeURIComponent(str.slice(start, i+1)).substr(1).split('%')
+      for (var j = 0; j < h.length; j++) {
+        byteArray.push(parseInt(h[j], 16))
+      }
+    }
+  }
+  return byteArray
+}
+
+function asciiToBytes (str) {
+  var byteArray = []
+  for (var i = 0; i < str.length; i++) {
+    // Node's code seems to be doing this and not & 0x7F..
+    byteArray.push(str.charCodeAt(i) & 0xFF)
+  }
+  return byteArray
+}
+
+function utf16leToBytes (str) {
+  var c, hi, lo
+  var byteArray = []
+  for (var i = 0; i < str.length; i++) {
+    c = str.charCodeAt(i)
+    hi = c >> 8
+    lo = c % 256
+    byteArray.push(lo)
+    byteArray.push(hi)
+  }
+
+  return byteArray
+}
+
+function base64ToBytes (str) {
+  return base64.toByteArray(str)
+}
+
+function blitBuffer (src, dst, offset, length, unitSize) {
+  if (unitSize) length -= length % unitSize;
+  for (var i = 0; i < length; i++) {
+    if ((i + offset >= dst.length) || (i >= src.length))
+      break
+    dst[i + offset] = src[i]
+  }
+  return i
+}
+
+function decodeUtf8Char (str) {
+  try {
+    return decodeURIComponent(str)
+  } catch (err) {
+    return String.fromCharCode(0xFFFD) // UTF 8 invalid char
+  }
+}
+
+},{"base64-js":53,"ieee754":54,"is-array":55}],53:[function(require,module,exports){
+var lookup = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+;(function (exports) {
+	'use strict';
+
+  var Arr = (typeof Uint8Array !== 'undefined')
+    ? Uint8Array
+    : Array
+
+	var PLUS   = '+'.charCodeAt(0)
+	var SLASH  = '/'.charCodeAt(0)
+	var NUMBER = '0'.charCodeAt(0)
+	var LOWER  = 'a'.charCodeAt(0)
+	var UPPER  = 'A'.charCodeAt(0)
+
+	function decode (elt) {
+		var code = elt.charCodeAt(0)
+		if (code === PLUS)
+			return 62 // '+'
+		if (code === SLASH)
+			return 63 // '/'
+		if (code < NUMBER)
+			return -1 //no match
+		if (code < NUMBER + 10)
+			return code - NUMBER + 26 + 26
+		if (code < UPPER + 26)
+			return code - UPPER
+		if (code < LOWER + 26)
+			return code - LOWER + 26
+	}
+
+	function b64ToByteArray (b64) {
+		var i, j, l, tmp, placeHolders, arr
+
+		if (b64.length % 4 > 0) {
+			throw new Error('Invalid string. Length must be a multiple of 4')
+		}
+
+		// the number of equal signs (place holders)
+		// if there are two placeholders, than the two characters before it
+		// represent one byte
+		// if there is only one, then the three characters before it represent 2 bytes
+		// this is just a cheap hack to not do indexOf twice
+		var len = b64.length
+		placeHolders = '=' === b64.charAt(len - 2) ? 2 : '=' === b64.charAt(len - 1) ? 1 : 0
+
+		// base64 is 4/3 + up to two characters of the original data
+		arr = new Arr(b64.length * 3 / 4 - placeHolders)
+
+		// if there are placeholders, only get up to the last complete 4 chars
+		l = placeHolders > 0 ? b64.length - 4 : b64.length
+
+		var L = 0
+
+		function push (v) {
+			arr[L++] = v
+		}
+
+		for (i = 0, j = 0; i < l; i += 4, j += 3) {
+			tmp = (decode(b64.charAt(i)) << 18) | (decode(b64.charAt(i + 1)) << 12) | (decode(b64.charAt(i + 2)) << 6) | decode(b64.charAt(i + 3))
+			push((tmp & 0xFF0000) >> 16)
+			push((tmp & 0xFF00) >> 8)
+			push(tmp & 0xFF)
+		}
+
+		if (placeHolders === 2) {
+			tmp = (decode(b64.charAt(i)) << 2) | (decode(b64.charAt(i + 1)) >> 4)
+			push(tmp & 0xFF)
+		} else if (placeHolders === 1) {
+			tmp = (decode(b64.charAt(i)) << 10) | (decode(b64.charAt(i + 1)) << 4) | (decode(b64.charAt(i + 2)) >> 2)
+			push((tmp >> 8) & 0xFF)
+			push(tmp & 0xFF)
+		}
+
+		return arr
+	}
+
+	function uint8ToBase64 (uint8) {
+		var i,
+			extraBytes = uint8.length % 3, // if we have 1 byte left, pad 2 bytes
+			output = "",
+			temp, length
+
+		function encode (num) {
+			return lookup.charAt(num)
+		}
+
+		function tripletToBase64 (num) {
+			return encode(num >> 18 & 0x3F) + encode(num >> 12 & 0x3F) + encode(num >> 6 & 0x3F) + encode(num & 0x3F)
+		}
+
+		// go through the array every three bytes, we'll deal with trailing stuff later
+		for (i = 0, length = uint8.length - extraBytes; i < length; i += 3) {
+			temp = (uint8[i] << 16) + (uint8[i + 1] << 8) + (uint8[i + 2])
+			output += tripletToBase64(temp)
+		}
+
+		// pad the end with zeros, but make sure to not forget the extra bytes
+		switch (extraBytes) {
+			case 1:
+				temp = uint8[uint8.length - 1]
+				output += encode(temp >> 2)
+				output += encode((temp << 4) & 0x3F)
+				output += '=='
+				break
+			case 2:
+				temp = (uint8[uint8.length - 2] << 8) + (uint8[uint8.length - 1])
+				output += encode(temp >> 10)
+				output += encode((temp >> 4) & 0x3F)
+				output += encode((temp << 2) & 0x3F)
+				output += '='
+				break
+		}
+
+		return output
+	}
+
+	exports.toByteArray = b64ToByteArray
+	exports.fromByteArray = uint8ToBase64
+}(typeof exports === 'undefined' ? (this.base64js = {}) : exports))
+
+},{}],54:[function(require,module,exports){
+exports.read = function(buffer, offset, isLE, mLen, nBytes) {
+  var e, m,
+      eLen = nBytes * 8 - mLen - 1,
+      eMax = (1 << eLen) - 1,
+      eBias = eMax >> 1,
+      nBits = -7,
+      i = isLE ? (nBytes - 1) : 0,
+      d = isLE ? -1 : 1,
+      s = buffer[offset + i];
+
+  i += d;
+
+  e = s & ((1 << (-nBits)) - 1);
+  s >>= (-nBits);
+  nBits += eLen;
+  for (; nBits > 0; e = e * 256 + buffer[offset + i], i += d, nBits -= 8);
+
+  m = e & ((1 << (-nBits)) - 1);
+  e >>= (-nBits);
+  nBits += mLen;
+  for (; nBits > 0; m = m * 256 + buffer[offset + i], i += d, nBits -= 8);
+
+  if (e === 0) {
+    e = 1 - eBias;
+  } else if (e === eMax) {
+    return m ? NaN : ((s ? -1 : 1) * Infinity);
+  } else {
+    m = m + Math.pow(2, mLen);
+    e = e - eBias;
+  }
+  return (s ? -1 : 1) * m * Math.pow(2, e - mLen);
+};
+
+exports.write = function(buffer, value, offset, isLE, mLen, nBytes) {
+  var e, m, c,
+      eLen = nBytes * 8 - mLen - 1,
+      eMax = (1 << eLen) - 1,
+      eBias = eMax >> 1,
+      rt = (mLen === 23 ? Math.pow(2, -24) - Math.pow(2, -77) : 0),
+      i = isLE ? 0 : (nBytes - 1),
+      d = isLE ? 1 : -1,
+      s = value < 0 || (value === 0 && 1 / value < 0) ? 1 : 0;
+
+  value = Math.abs(value);
+
+  if (isNaN(value) || value === Infinity) {
+    m = isNaN(value) ? 1 : 0;
+    e = eMax;
+  } else {
+    e = Math.floor(Math.log(value) / Math.LN2);
+    if (value * (c = Math.pow(2, -e)) < 1) {
+      e--;
+      c *= 2;
+    }
+    if (e + eBias >= 1) {
+      value += rt / c;
+    } else {
+      value += rt * Math.pow(2, 1 - eBias);
+    }
+    if (value * c >= 2) {
+      e++;
+      c /= 2;
+    }
+
+    if (e + eBias >= eMax) {
+      m = 0;
+      e = eMax;
+    } else if (e + eBias >= 1) {
+      m = (value * c - 1) * Math.pow(2, mLen);
+      e = e + eBias;
+    } else {
+      m = value * Math.pow(2, eBias - 1) * Math.pow(2, mLen);
+      e = 0;
+    }
+  }
+
+  for (; mLen >= 8; buffer[offset + i] = m & 0xff, i += d, m /= 256, mLen -= 8);
+
+  e = (e << mLen) | m;
+  eLen += mLen;
+  for (; eLen > 0; buffer[offset + i] = e & 0xff, i += d, e /= 256, eLen -= 8);
+
+  buffer[offset + i - d] |= s * 128;
+};
+
+},{}],55:[function(require,module,exports){
+
+/**
+ * isArray
+ */
+
+var isArray = Array.isArray;
+
+/**
+ * toString
+ */
+
+var str = Object.prototype.toString;
+
+/**
+ * Whether or not the given `val`
+ * is an array.
+ *
+ * example:
+ *
+ *        isArray([]);
+ *        // > true
+ *        isArray(arguments);
+ *        // > false
+ *        isArray('');
+ *        // > false
+ *
+ * @param {mixed} val
+ * @return {bool}
+ */
+
+module.exports = isArray || function (val) {
+  return !! val && '[object Array]' == str.call(val);
+};
+
+},{}],56:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -5562,7 +7515,7 @@ function isUndefined(arg) {
   return arg === void 0;
 }
 
-},{}],47:[function(require,module,exports){
+},{}],57:[function(require,module,exports){
 // shim for using process in browser
 
 var process = module.exports = {};
@@ -5650,4 +7603,4 @@ process.chdir = function (dir) {
     throw new Error('process.chdir is not supported');
 };
 
-},{}]},{},[9]);
+},{}]},{},[11]);
