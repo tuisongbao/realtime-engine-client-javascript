@@ -77,7 +77,7 @@ Channel = (function(_super) {
   }
 
   Channel.prototype._authorize = function(callback) {
-    return callback(false);
+    return callback(null);
   };
 
   Channel.prototype.subscribe = function() {
@@ -244,13 +244,14 @@ PresenceChannel = (function(_super) {
     this.users = new Users();
   }
 
-  PresenceChannel.prototype._authorize = function(socketId, callback) {
-    return PresenceChannel.__super__._authorize.call(this, socketId, (function(_this) {
+  PresenceChannel.prototype._authorize = function(callback) {
+    return PresenceChannel.__super__._authorize.call(this, (function(_this) {
       return function(err, authResult) {
-        var _ref;
-        if (!err) {
-          _this.users.setMyId(authResult != null ? (_ref = authResult.channelData) != null ? _ref.userId : void 0 : void 0);
-        }
+        try {
+          if (!err) {
+            _this.users.setMyId(JSON.parse(authResult.channelData).userId);
+          }
+        } catch (_error) {}
         return callback(err, authResult);
       };
     })(this));
@@ -596,7 +597,7 @@ Utils = require('../utils');
 
 Protocol = require('../protocol');
 
-SDK_VERSION = 'v0.9.1';
+SDK_VERSION = 'v0.9.2';
 
 
 /**
@@ -4698,7 +4699,7 @@ function coerce(val) {
 
 },{"ms":36}],36:[function(require,module,exports){
 module.exports=require(21)
-},{"/root/wp/server/node_modules/debug/node_modules/ms/index.js":21}],37:[function(require,module,exports){
+},{"/srv/newtuisongbao_server/node_modules/debug/node_modules/ms/index.js":21}],37:[function(require,module,exports){
 (function (global){
 /**
  * Module dependencies.

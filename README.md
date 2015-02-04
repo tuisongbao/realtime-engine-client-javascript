@@ -1,10 +1,10 @@
 <div class="alert alert-warning">
-    阅读此文档前，请先阅读 [实时引擎指南](docs/engineGuide) 。
+    阅读此文档前，请先阅读 [实时引擎指南](http://www.tuisongbao.com:80/docs/engineGuide) 。
 </div>
 
 ## 安装
 
-从 [这里](downloadSDK/engineSDK##javascript) 下载，或者使用 bower 安装：
+从 [这里](http://www.tuisongbao.com:80/downloadSDK/engineSDK##javascript) 下载，或者使用 bower 安装：
 
 ```bash
 bower install tuisongbao-realtime-engine-client
@@ -210,8 +210,8 @@ engine.chatManager.login({
         console.log(presence);
     },
     // 新消息处理函数
-    onNewMessage: function (chatMessage) {
-        console.log(chatMessage);
+    onNewMessage: function (message) {
+        console.log(message);
     }
 });
 ```
@@ -236,7 +236,7 @@ engine.chatManager.login({
 }
 ```
 
-`chatMessage` 结构：
+`message` 结构：
 
 ```js
 {
@@ -376,7 +376,7 @@ engine.chatManager.createGroup({
 }
 ```
 
-#### 邀请用户加入
+#### 邀请用户加入群组
 
 ```js
 engine.chatManager.inviteUsersIntoGroup({
@@ -493,7 +493,7 @@ engine.chatManager.deleteConversation({
 
 ### 消息相关
 
-#### 获取历史消息列表 
+#### 获取历史消息
 
 ```js
 engine.chatManager.getMessages({
