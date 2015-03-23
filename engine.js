@@ -19,6 +19,9 @@ Authorizer = (function() {
     }
     authTransport = options.authTransport || this.engine.options.authTransport;
     authData = options.authData || this.engine.options.authData;
+    if (typeof authData === 'object') {
+      authData = JSON.stringify(authData);
+    }
     data.socketId = this.engine.connection.socketId;
     if (authData) {
       data.authData = authData;
@@ -419,7 +422,7 @@ ChatManager = (function() {
     this.engine = _at_engine;
     this._loginOptions = null;
     this.user = null;
-    this.loggedIn = false;
+    this.state = 'initialized';
   }
 
   ChatManager.prototype._separateOptionsAndHandlers = function(originalOptions) {
@@ -440,7 +443,7 @@ ChatManager = (function() {
   ChatManager.prototype._request = function(eventName, options, needSendAck) {
     var callback, handlers, _ref;
     _ref = this._separateOptionsAndHandlers(options), options = _ref[0], handlers = _ref[1];
-    if (!this.loggedIn) {
+    if (this.state !== 'loggedIn') {
       return typeof handlers.onError === "function" ? handlers.onError(Protocol.responseErrors.unauthorized) : void 0;
     }
     callback = function(err, result) {
@@ -461,6 +464,7 @@ ChatManager = (function() {
     if (options == null) {
       options = {};
     }
+    this.state = 'loggingIn';
     this._loginOptions = options;
     if (this.engine.connection.state !== 'connected') {
       return;
@@ -474,6 +478,7 @@ ChatManager = (function() {
     }, (function(_this) {
       return function(err, authResult) {
         if (err) {
+          _this.state = 'failed';
           return typeof handlers.onError === "function" ? handlers.onError(err) : void 0;
         }
         try {
@@ -486,13 +491,14 @@ ChatManager = (function() {
               return;
             }
             debug('login error', err);
+            _this.state = 'failed';
             return typeof handlers.onError === "function" ? handlers.onError(err) : void 0;
           }
           for (k in result) {
             v = result[k];
             _this.user[k] = v;
           }
-          _this.loggedIn = true;
+          _this.state = 'loggedIn';
           debug('login succeeded', result);
           return typeof handlers.onSuccess === "function" ? handlers.onSuccess(result) : void 0;
         });
@@ -514,12 +520,12 @@ ChatManager = (function() {
       return function(err) {
         if (err) {
           if (err.code === Protocol.responseErrors.noConnection) {
-            return;
+            return _this.state = 'loggedOut';
           }
           debug('logout error', err);
           return typeof handlers.onError === "function" ? handlers.onError(err) : void 0;
         }
-        _this.loggedIn = false;
+        _this.state = 'loggedOut';
         _this.user = null;
         debug('logout succeeded');
         return typeof handlers.onSuccess === "function" ? handlers.onSuccess() : void 0;
@@ -581,7 +587,7 @@ module.exports = ChatManager;
 },{"./protocol":12,"debug":19}],8:[function(require,module,exports){
 (function (process){
 'use strict';
-var Connection, EventEmitter, Protocol, SDK_VERSION, ServerAddrManager, Utils, debug, eio,
+var Connection, EventEmitter, Protocol, ServerAddrManager, Utils, debug, eio,
   __extends = function(child, parent) { for (var key in parent) { if (__hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
   __hasProp = {}.hasOwnProperty;
 
@@ -596,8 +602,6 @@ ServerAddrManager = require('./serverAddrManager');
 Utils = require('../utils');
 
 Protocol = require('../protocol');
-
-SDK_VERSION = 'v0.9.2';
 
 
 /**
@@ -669,7 +673,7 @@ Connection = (function(_super) {
         return this.sendResponseEvent(event.id);
       }
     } else {
-      return callback(event.data.err);
+      return callback(event.data.error);
     }
   };
 
@@ -697,7 +701,7 @@ Connection = (function(_super) {
       query: {
         appId: this.engine.appId,
         platform: Utils.getPlatform(),
-        sdkVersion: SDK_VERSION,
+        sdkVersion: this.engine.version,
         protocol: Protocol.version
       }
     });
@@ -763,16 +767,17 @@ Connection = (function(_super) {
       callback = data;
       data = null;
     }
-    debug('send event', {
-      name: name,
-      data: data
-    });
     if (this.state === 'connected') {
       if (this.eventId == null) {
         this.eventId = 0;
       }
       this.eventId++;
       message = Protocol.encodeEvent({
+        id: this.eventId,
+        name: name,
+        data: data
+      });
+      debug('send event', {
         id: this.eventId,
         name: name,
         data: data
@@ -1032,6 +1037,7 @@ Engine = (function() {
     if (!this.appId) {
       Utils.throwError('appId is required.');
     }
+    this.version = 'v1.0.0';
     this.connection = new Connection(this);
     this.authorizer = new Authorizer(this);
     this.channels = new Channels(this);

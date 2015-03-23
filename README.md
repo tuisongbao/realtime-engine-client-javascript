@@ -1,10 +1,13 @@
+
 <div class="alert alert-warning">
     阅读此文档前，请先阅读 [实时引擎指南](http://www.tuisongbao.com:80/docs/engineGuide) 。
 </div>
 
 ## 安装
 
-从 [这里](http://www.tuisongbao.com:80/downloadSDK/engineSDK##javascript) 下载，或者使用 bower 安装：
+![bower](https://img.shields.io/bower/v/tuisongbao-realtime-engine-client.svg)
+
+从 [这里](http://www.tuisongbao.com:80/downloadSDK/engine##javascript) 下载，或者使用 bower 安装：
 
 ```bash
 bower install tuisongbao-realtime-engine-client
@@ -30,7 +33,7 @@ var options = {
     authEndpoint: 'http://yourdomain.com/tuisongbao_engine/auth',
     // 认证用户请求方式，默认为 `xhr` ，使用 XMLHttpRequest ，但是该方式在 IE8/9 上存在跨域问题，如果你配置的 authEndpoint 跨域并且需要支持 IE8/9 ，应使用 `jsonp` ，同时请确保你的服务端支持 `jsonp` 请求，该设置在所有浏览器上生效，并非仅在 IE8/9 上生效
     authTransport: 'jsonp',
-    // 可选，如果配置，认证请求将携带该值，可以用来表明用户身份
+    // 可选，如果配置，认证请求将携带该值，可以用来表明用户身份。当结合 jsonp 使用时，该值如果为 Object ，会被序列化成 JSON 字符串。
     authData: 'abcdefghijklmn'
 };
 
@@ -191,14 +194,14 @@ presenceChannel.bind('engine:user_removed', function (user) {
 
 ### 用户相关
 
-#### 登陆
+#### 登录
 
 ```js
 engine.chatManager.login({
     // 这里使用 authData 将覆盖实例化 Engine 时的参数
     authData: 'abcdefghijklmn',
-    // 登陆成功处理函数，通常需要进行获取群组列表、会话列表等操作,
-    // 注意，网络断开时会自动重连并重新 login ，该回调也会被再此执行
+    // 登录成功处理函数，通常需要进行获取群组列表、会话列表等操作,
+    // 注意，网络断开时会自动重连并重新 login ，该回调也会被再次执行
     onSuccess: function (result) {
         console.log(result);
     },
@@ -269,14 +272,14 @@ engine.chatManager.logout({
 ```
 
 
-#### 获取当前用户及登陆状态
+#### 获取当前用户及登录状态
 
 ```js
 // 内容为认证用户时你的服务端所返回的 userData
 console.log(engine.chatManager.user);
 
-// 布尔值，表示是否已登陆
-console.log(engine.chatManager.loggedIn);
+// 枚举值： initialized, loggingIn, loggedIn, failed
+console.log(engine.chatManager.state);
 ```
 
 ### 群组相关
@@ -575,3 +578,11 @@ engine.connection.disconnect();
 ## 调试
 
 在浏览器开发者工具 Console 中运行 `Engine.debug.enable('engine:*')` 可以启用调试日志，要停用运行 `Engine.debug.disable()` 即可。
+
+## 升级步骤
+
+# v0.9.2 至 1.0.0
+
+- 替换 `engine.js` 即可。
+- `chatManager`:
+    - 移除了 `chatManager.loggedIn` ，新增 `chatManager.state`
