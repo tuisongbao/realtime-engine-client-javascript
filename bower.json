@@ -1,6 +1,6 @@
 {
-  "name": "tuisongbao-realtime-engine",
-  "version": "v1.0.0",
+  "name": "tuisongbao-realtime-engine-client",
+  "version": "v2.1.0",
   "authors": [
     "inetfuture(Aaron Wang) <inetfuture@gmail.com>"
   ],

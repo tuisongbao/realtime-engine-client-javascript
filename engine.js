@@ -6,9 +6,15 @@ debug = require('debug')('engine:authorizer');
 
 Requester = require('./utils/requester');
 
+
+/*
+  @nodoc
+ */
+
 Authorizer = (function() {
-  function Authorizer(_at_engine) {
-    this.engine = _at_engine;
+  function Authorizer(engine) {
+    this.engine = engine;
+    void 0;
   }
 
   Authorizer.prototype.authorize = function(options, data, callback) {
@@ -26,7 +32,7 @@ Authorizer = (function() {
     if (authData) {
       data.authData = authData;
     }
-    if (window && authTransport === 'jsonp') {
+    if ((typeof window !== "undefined" && window !== null) && authTransport === 'jsonp') {
       requestMethod = Requester.jsonp;
     } else {
       requestMethod = Requester.post;
@@ -59,25 +65,47 @@ module.exports = Authorizer;
 
 
 
-},{"./utils/requester":15,"debug":19}],2:[function(require,module,exports){
+},{"./utils/requester":33,"debug":38}],2:[function(require,module,exports){
 'use strict';
 var Channel, EventEmitter, debug,
-  __extends = function(child, parent) { for (var key in parent) { if (__hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
-  __hasProp = {}.hasOwnProperty;
+  extend = function(child, parent) { for (var key in parent) { if (hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
+  hasProp = {}.hasOwnProperty;
 
 debug = require('debug')('engine:channel');
 
 EventEmitter = require('../utils/eventEmitter');
 
-Channel = (function(_super) {
-  __extends(Channel, _super);
 
-  function Channel(_at_name, _at_engine) {
+/*
+  Channel 类
+
+  事件
+  -------------------------------
+  - **engine:subscription_succeeded** 认证成功
+      - 无参数
+  - **engine:subscription_error** 认证失败
+      - **error** (Object) ： error 信息
+ */
+
+Channel = (function(superClass) {
+  extend(Channel, superClass);
+
+
+  /*
+    @nodoc
+   */
+
+  function Channel(name, engine) {
     var subscribed;
-    this.name = _at_name;
-    this.engine = _at_engine;
+    this.name = name;
+    this.engine = engine;
     subscribed = false;
   }
+
+
+  /*
+    @nodoc
+   */
 
   Channel.prototype._authorize = function(callback) {
     return callback(null);
@@ -88,7 +116,10 @@ Channel = (function(_super) {
     return this._authorize((function(_this) {
       return function(err, data) {
         if (err) {
-          return _this.handleEvent('engine_channel:subscription_error', err);
+          return _this.handleEvent({
+            name: 'engine_channel:subscription_error',
+            data: err
+          });
         }
         return _this.engine.connection.sendEvent('engine_channel:subscribe', {
           channel: _this.name,
@@ -106,18 +137,28 @@ Channel = (function(_super) {
     });
   };
 
+
+  /*
+    @nodoc
+   */
+
   Channel.prototype.handleEvent = function(event) {
     switch (event.name) {
       case 'engine_channel:subscription_succeeded':
         this.subscribed = true;
-        return this.emit('engine:subscription_succeeded', event.data);
+        return this.trigger('engine:subscription_succeeded', event.data);
       case 'engine_channel:subscription_error':
         this.subscribed = false;
-        return this.emit('engine:subscription_error', event.data);
+        return this.trigger('engine:subscription_error', event.data);
       default:
-        return this.emit(event.name, event.data);
+        return this.trigger(event.name, event.data);
     }
   };
+
+
+  /*
+    @nodoc
+   */
 
   Channel.prototype.disconnect = function() {
     return this.subscribed = false;
@@ -131,10 +172,10 @@ module.exports = Channel;
 
 
 
-},{"../utils/eventEmitter":13,"debug":19}],3:[function(require,module,exports){
+},{"../utils/eventEmitter":30,"debug":38}],3:[function(require,module,exports){
 'use strict';
-var Channel, Channels, PresenceChannel, PrivateChannel,
-  __hasProp = {}.hasOwnProperty;
+var Channel, Channels, PresenceChannel, PrivateChannel, Protocol,
+  hasProp = {}.hasOwnProperty;
 
 Channel = require('./channel');
 
@@ -142,16 +183,27 @@ PrivateChannel = require('./privateChannel');
 
 PresenceChannel = require('./presenceChannel');
 
+Protocol = require('../protocol');
 
-/**
- * Store channels map and provide convenient batch operations.
+
+/*
+  Channel 管理类，用户可以通过 engine.channels 获得
  */
 
 Channels = (function() {
-  function Channels(_at_engine) {
-    this.engine = _at_engine;
+
+  /*
+    @nodoc
+   */
+  function Channels(engine) {
+    this.engine = engine;
     this._store = {};
   }
+
+
+  /*
+    @nodoc
+   */
 
   Channels.prototype._createChannel = function(name) {
     if (name.indexOf('private-') !== -1) {
@@ -163,14 +215,29 @@ Channels = (function() {
     }
   };
 
+
+  /*
+    @nodoc
+   */
+
   Channels.prototype._isConnected = function() {
     return this.engine.connection.state === 'connected';
   };
 
-  Channels.prototype.add = function(name) {
-    var channel, _base;
-    if ((_base = this._store)[name] == null) {
-      _base[name] = this._createChannel(name);
+
+  /*
+    订阅 Channel
+    @example 订阅 Channel
+      var coolChannel = engine.channels.subscribe('cool-channel');
+    @param [String] channelName Channel Name
+    @return [Channel]
+   */
+
+  Channels.prototype.subscribe = function(name) {
+    var base, channel;
+    Protocol.validateChannel(name);
+    if ((base = this._store)[name] == null) {
+      base[name] = this._createChannel(name);
     }
     channel = this._store[name];
     if (this._isConnected()) {
@@ -179,44 +246,76 @@ Channels = (function() {
     return channel;
   };
 
-  Channels.prototype.remove = function(name) {
-    var channel;
-    channel = this._store[name];
-    if (channel && this._isConnected()) {
-      channel.unsubscribe();
+
+  /*
+    取消订阅
+    @example 取消订阅
+      engine.channels.unsubscribe('cool-channel');
+    @param [String] channelName Channel Name
+    @return [void]
+   */
+
+  Channels.prototype.unsubscribe = function(name) {
+    var ref;
+    Protocol.validateChannel(name);
+    if (this._isConnected()) {
+      if ((ref = this._store[name]) != null) {
+        ref.unsubscribe();
+      }
     }
-    return channel;
+    return delete this._store[name];
   };
 
+
+  /*
+    获取已订阅的 Channel 实例
+    @example 获取已订阅的 Channel 实例
+      var coolChannel = engine.channels.find('cool-channel');
+  
+    @param [String] channelName Channel Name
+    @return [Channel]
+   */
+
   Channels.prototype.find = function(name) {
+    Protocol.validateChannel(name);
     return this._store[name];
   };
 
-  Channels.prototype.subscribe = function() {
-    var channel, name, _ref, _results;
-    if (this.engine.connection.state !== 'connected') {
+
+  /*
+    @nodoc
+   */
+
+  Channels.prototype.subscribeAll = function() {
+    var channel, name, ref, results;
+    if (!this._isConnected()) {
       return;
     }
-    _ref = this._store;
-    _results = [];
-    for (name in _ref) {
-      if (!__hasProp.call(_ref, name)) continue;
-      channel = _ref[name];
-      _results.push(channel.subscribe());
+    ref = this._store;
+    results = [];
+    for (name in ref) {
+      if (!hasProp.call(ref, name)) continue;
+      channel = ref[name];
+      results.push(channel.subscribe());
     }
-    return _results;
+    return results;
   };
 
+
+  /*
+    @nodoc
+   */
+
   Channels.prototype.disconnect = function() {
-    var channel, name, _ref, _results;
-    _ref = this._store;
-    _results = [];
-    for (name in _ref) {
-      if (!__hasProp.call(_ref, name)) continue;
-      channel = _ref[name];
-      _results.push(channel.disconnect());
+    var channel, name, ref, results;
+    ref = this._store;
+    results = [];
+    for (name in ref) {
+      if (!hasProp.call(ref, name)) continue;
+      channel = ref[name];
+      results.push(channel.disconnect());
     }
-    return _results;
+    return results;
   };
 
   return Channels;
@@ -227,25 +326,79 @@ module.exports = Channels;
 
 
 
-},{"./channel":2,"./presenceChannel":4,"./privateChannel":5}],4:[function(require,module,exports){
+},{"../protocol":29,"./channel":2,"./presenceChannel":4,"./privateChannel":5}],4:[function(require,module,exports){
 'use strict';
 var PresenceChannel, PrivateChannel, Users,
-  __extends = function(child, parent) { for (var key in parent) { if (__hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
-  __hasProp = {}.hasOwnProperty;
+  extend = function(child, parent) { for (var key in parent) { if (hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
+  hasProp = {}.hasOwnProperty;
 
 PrivateChannel = require('./privateChannel');
 
 Users = require('./users');
 
-PresenceChannel = (function(_super) {
-  __extends(PresenceChannel, _super);
 
-  function PresenceChannel(_at_name, _at_engine) {
-    this.name = _at_name;
-    this.engine = _at_engine;
+/*
+  PresenceChannel 类，在 {PrivateChannel} 的基础上，提供了在线用户的状态服务
+
+  事件
+  -------------------------------
+  - **engine:subscription_succeeded** 认证成功时触发，处理函数将得到一个额外的参数 users
+      - **users** (Object) ： 用户列表，该对象结构如下：
+
+          ```js
+          {
+            // 该 Channel 上的当前在线用户数
+            "count": 100,
+            // 接收一个方法作为参数，用来遍历当前在线用户
+            "each": [Function],
+            // 当前用户
+            "me": {
+              "id": "11111",
+              "info": "Fake user info for socket 111111 on channel presence-demo"
+            }
+          }
+          ```
+
+  - **engine:user_added** 新用户订阅 channel ，处理函数的参数如下：
+      - **user** (Object) ： 用户信息，该对象结构如下：
+
+          ```js
+          {
+            "id": "1111",
+            "info": "Fake User Info For UowsMQDGV_kAn3g6AAAi"
+          }
+          ```
+
+  - **engine:user_removed** 用户离开 channel ，处理函数的参数如下：
+      - **user** (Object) ： 用户信息，该对象结构如下：
+
+          ```js
+          {
+            "id": "1111",
+            "info": "private-K2aEIptlMy7lTVGg"
+          }
+          ```
+ */
+
+PresenceChannel = (function(superClass) {
+  extend(PresenceChannel, superClass);
+
+
+  /*
+    @nodoc
+   */
+
+  function PresenceChannel(name, engine) {
+    this.name = name;
+    this.engine = engine;
     PresenceChannel.__super__.constructor.call(this, this.name, this.engine);
     this.users = new Users();
   }
+
+
+  /*
+    @nodoc
+   */
 
   PresenceChannel.prototype._authorize = function(callback) {
     return PresenceChannel.__super__._authorize.call(this, (function(_this) {
@@ -254,11 +407,16 @@ PresenceChannel = (function(_super) {
           if (!err) {
             _this.users.setMyId(JSON.parse(authResult.channelData).userId);
           }
-        } catch (_error) {}
+        } catch (undefined) {}
         return callback(err, authResult);
       };
     })(this));
   };
+
+
+  /*
+    @nodoc
+   */
 
   PresenceChannel.prototype.handleEvent = function(event) {
     var addedUser, removedUser;
@@ -266,23 +424,28 @@ PresenceChannel = (function(_super) {
       case 'engine_channel:subscription_succeeded':
         this.subscribed = true;
         this.users.setUsers(event.data);
-        return this.emit('engine:subscription_succeeded', this.users);
+        return this.trigger('engine:subscription_succeeded', this.users);
       case 'engine_channel:subscription_error':
         this.subscribed = false;
-        return this.emit('engine:subscription_error', event.data);
+        return this.trigger('engine:subscription_error', event.data);
       case 'engine_channel:user_added':
         addedUser = this.users.addUser(event.data);
-        return this.emit('engine:user_added', addedUser);
+        return this.trigger('engine:user_added', addedUser);
       case 'engine_channel:user_removed':
         removedUser = this.users.removeUser(event.data);
         if (removedUser) {
-          return this.emit('engine:user_removed', removedUser);
+          return this.trigger('engine:user_removed', removedUser);
         }
         break;
       default:
         return PresenceChannel.__super__.handleEvent.call(this, event);
     }
   };
+
+
+  /*
+    @nodoc
+   */
 
   PresenceChannel.prototype.disconnect = function() {
     this.users.reset();
@@ -300,8 +463,8 @@ module.exports = PresenceChannel;
 },{"./privateChannel":5,"./users":6}],5:[function(require,module,exports){
 'use strict';
 var Channel, PrivateChannel, Requester, Utils,
-  __extends = function(child, parent) { for (var key in parent) { if (__hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
-  __hasProp = {}.hasOwnProperty;
+  extend = function(child, parent) { for (var key in parent) { if (hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
+  hasProp = {}.hasOwnProperty;
 
 Channel = require('./channel');
 
@@ -309,12 +472,22 @@ Requester = require('../utils/requester');
 
 Utils = require('../utils');
 
-PrivateChannel = (function(_super) {
-  __extends(PrivateChannel, _super);
+
+/*
+  PrivateChannel 类，在 {Channel} 的基础上提供了用户认证机制
+ */
+
+PrivateChannel = (function(superClass) {
+  extend(PrivateChannel, superClass);
 
   function PrivateChannel() {
     return PrivateChannel.__super__.constructor.apply(this, arguments);
   }
+
+
+  /*
+    @nodoc
+   */
 
   PrivateChannel.prototype._authorize = function(callback) {
     return this.engine.authorizer.authorize({}, {
@@ -330,8 +503,12 @@ module.exports = PrivateChannel;
 
 
 
-},{"../utils":14,"../utils/requester":15,"./channel":2}],6:[function(require,module,exports){
+},{"../utils":31,"../utils/requester":33,"./channel":2}],6:[function(require,module,exports){
 'use strict';
+
+/*
+  @nodoc
+ */
 var Users;
 
 Users = (function() {
@@ -358,11 +535,11 @@ Users = (function() {
   };
 
   Users.prototype.setUsers = function(users) {
-    var user, _i, _len;
+    var i, len, user;
     this._users = {};
     this.count = 0;
-    for (_i = 0, _len = users.length; _i < _len; _i++) {
-      user = users[_i];
+    for (i = 0, len = users.length; i < len; i++) {
+      user = users[i];
       this._users[user.userId] = this._formatUser(user);
       this.count++;
     }
@@ -387,14 +564,14 @@ Users = (function() {
   };
 
   Users.prototype.each = function(fn) {
-    var user, userId, _ref, _results;
-    _ref = this._users;
-    _results = [];
-    for (userId in _ref) {
-      user = _ref[userId];
-      _results.push(fn(user));
+    var ref, results, user, userId;
+    ref = this._users;
+    results = [];
+    for (userId in ref) {
+      user = ref[userId];
+      results.push(fn(user));
     }
-    return _results;
+    return results;
   };
 
   Users.prototype.get = function(userId) {
@@ -411,56 +588,2290 @@ module.exports = Users;
 
 },{}],7:[function(require,module,exports){
 'use strict';
-var ChatManager, Protocol, api, debug, event, trivialRequestResponseAPIEventMapping, _fn;
+var ConfirmAlert, EventAlert, Promise, chatManagerUtil, debug,
+  extend = function(child, parent) { for (var key in parent) { if (hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
+  hasProp = {}.hasOwnProperty;
 
-debug = require('debug')('engine:chatManager');
+debug = require('debug')('engine:chat:confirmAlert');
 
-Protocol = require('./protocol');
+chatManagerUtil = require('../chatManagerUtil');
 
-ChatManager = (function() {
-  function ChatManager(_at_engine) {
-    this.engine = _at_engine;
+Promise = require('../../utils/promise');
+
+EventAlert = require('./eventAlert');
+
+
+/*
+  用来处理通知
+ */
+
+ConfirmAlert = (function(superClass) {
+  extend(ConfirmAlert, superClass);
+
+  function ConfirmAlert() {
+    return ConfirmAlert.__super__.constructor.apply(this, arguments);
+  }
+
+
+  /*
+    接受该通知
+  
+    @example 接受该通知（Promise）
+      alert.accept().then(function() {
+        // 接受成功
+      }).catch(function(err) {
+        // 处理 error
+      });
+  
+    @example 接受该通知（回调）
+      var onSuccess = function() {
+        // 接受成功
+      };
+  
+      var onError = function(err) {
+        // 处理 error
+      };
+  
+      alert.accept({
+        onSuccess: onSuccess,
+        onError: onError
+      });
+  
+    @param [Object] options 参数
+    @option options [Function] onSuccess 成功后回调的函數，可选
+    @option options [Function] onError 失败后回调的函數，可选
+    @return [void, Promise] 如果 options 中含有 onSuccess 或者 onError 则无返回值，否则返回 Promise
+   */
+
+  ConfirmAlert.prototype.accept = function(options) {
+    var promiseOptions;
+    options.alertId = this.alertId;
+    options.alertType = (function() {
+      switch (this.type) {
+        case 'group:joinInvitation:new':
+          return 'group:joinInvitation:accepted';
+      }
+    }).call(this);
+    promiseOptions = chatManagerUtil.getPromiseOption(options);
+    return this._accept(promiseOptions).then((function(_this) {
+      return function() {
+        var ref;
+        if (!((ref = _this.engine.options.chat) != null ? ref.enableCache : void 0)) {
+          return typeof options.onSuccess === "function" ? options.onSuccess() : void 0;
+        }
+        return _this._updateCacheWithStatus('processed');
+      };
+    })(this)).then(function() {
+      return typeof options.onSuccess === "function" ? options.onSuccess() : void 0;
+    })["catch"](function(err) {
+      return typeof options.onError === "function" ? options.onError(err) : void 0;
+    });
+  };
+
+
+  /*
+    拒绝该通知
+  
+    @example 拒绝该通知（Promise）
+      alert.reject().then(function() {
+        // 拒绝成功
+      }).catch(function(err) {
+        // 处理 error
+      });
+  
+    @example 拒绝该通知（回调）
+      var onSuccess = function() {
+        // 拒绝成功
+      };
+  
+      var onError = function(err) {
+        // 处理 error
+      };
+  
+      alert.reject({
+        onSuccess: onSuccess,
+        onError: onError
+      });
+  
+    @param [Object] options 参数
+    @option options [Function] onSuccess 成功后回调的函數，可选
+    @option options [Function] onError 失败后回调的函數，可选
+    @return [void, Promise] 如果 options 中含有 onSuccess 或者 onError 则无返回值，否则返回 Promise
+   */
+
+  ConfirmAlert.prototype.reject = function(options) {
+    var promiseOptions;
+    options.alertId = this.alertId;
+    options.alertType = (function() {
+      switch (this.type) {
+        case 'group:joinInvitation:new':
+          return 'group:joinInvitation:rejected';
+      }
+    }).call(this);
+    promiseOptions = chatManagerUtil.getPromiseOption(options);
+    return this._reject(promiseOptions).then((function(_this) {
+      return function() {
+        var ref;
+        if (!((ref = _this.engine.options.chat) != null ? ref.enableCache : void 0)) {
+          return typeof options.onSuccess === "function" ? options.onSuccess() : void 0;
+        }
+        return _this._updateCacheWithStatus('processed');
+      };
+    })(this)).then(function() {
+      return typeof options.onSuccess === "function" ? options.onSuccess() : void 0;
+    })["catch"](function(err) {
+      return typeof options.onError === "function" ? options.onError(err) : void 0;
+    });
+  };
+
+
+  /*
+    @nodoc
+   */
+
+  ConfirmAlert.prototype._accept = function(options) {
+    return this.engine.chatManager.request('engine_chat:alert:accept', options);
+  };
+
+
+  /*
+    @nodoc
+   */
+
+  ConfirmAlert.prototype._reject = function(options) {
+    return this.engine.chatManager.request('engine_chat:alert:reject', options);
+  };
+
+  return ConfirmAlert;
+
+})(EventAlert);
+
+Promise.toPromise(ConfirmAlert);
+
+module.exports = ConfirmAlert;
+
+
+
+},{"../../utils/promise":32,"../chatManagerUtil":10,"./eventAlert":8,"debug":38}],8:[function(require,module,exports){
+'use strict';
+var EventAlert, Promise, chatManagerUtil, debug;
+
+debug = require('debug')('engine:chat:eventAlert');
+
+chatManagerUtil = require('../chatManagerUtil');
+
+Promise = require('../../utils/promise');
+
+
+/*
+  通知类
+
+  属性
+  --------------------------------------------------------
+  - **alertId**  (String) - 通知的唯一标识
+  - **from**  (String) - 通知发出者
+  - **to**  (String) - 通知接收者
+  - **group**  (String) - 群组的 ID ，群组的唯一标识
+  - **type**  (String) - 通知类型
+  - **status**  (String) - 通知的处理状态，有： **pending** 和 **processed**
+  - **lastActiveAt** (String) - 最后更新时间
+ */
+
+EventAlert = (function() {
+
+  /*
+    @nodoc
+   */
+  function EventAlert(option, engine) {
+    this.engine = engine;
+    this.alertId = option.alertId, this.from = option.from, this.to = option.to, this.group = option.group, this.type = option.type, this.status = option.status, this.lastActiveAt = option.lastActiveAt;
+  }
+
+
+  /*
+    @nodoc
+   */
+
+  EventAlert.prototype._updateCacheWithStatus = function(status) {
+    var ref;
+    return (ref = this.engine.chatManager.dbUtil) != null ? ref.openDB().then((function(_this) {
+      return function(db) {
+        var alert;
+        alert = {
+          alertId: _this.alertId,
+          from: _this.from,
+          to: _this.to,
+          type: _this.type,
+          group: _this.group,
+          status: status,
+          lastActiveAt: _this.lastActiveAt
+        };
+        return db.alerts.update(alert);
+      };
+    })(this)) : void 0;
+  };
+
+
+  /*
+    忽略该通知
+  
+    @example 忽略该通知（Promise）
+      alert.ignore().then(function() {
+        // 忽略通知成功
+      }).catch(function(err) {
+        // 处理 error
+      });
+  
+    @example 忽略该通知（回调）
+      var onSuccess = function() {
+        // 忽略通知成功
+      };
+  
+      var onError = function(err) {
+        // 处理 error
+      };
+  
+      alert.ignore({
+        onSuccess: onSuccess,
+        onError: onError
+      });
+  
+    @param [Object] options 参数
+    @option options [Function] onSuccess 成功后回调的函數，可选
+    @option options [Function] onError 失败后回调的函數，可选
+    @return [void, Promise] 如果 options 中含有 onSuccess 或者 onError 则无返回值，否则返回 Promise
+   */
+
+  EventAlert.prototype.ignore = function(options) {
+    var promiseOptions;
+    options.alertId = this.alertId;
+    promiseOptions = chatManagerUtil.getPromiseOption(options);
+    return this._ignore(promiseOptions).then((function(_this) {
+      return function() {
+        var ref;
+        if (!((ref = _this.engine.options.chat) != null ? ref.enableCache : void 0)) {
+          return typeof options.onSuccess === "function" ? options.onSuccess() : void 0;
+        }
+        return _this._updateCacheWithStatus('processed');
+      };
+    })(this)).then(function() {
+      return typeof options.onSuccess === "function" ? options.onSuccess() : void 0;
+    })["catch"](function(err) {
+      return typeof options.onError === "function" ? options.onError(err) : void 0;
+    });
+  };
+
+
+  /*
+    @nodoc
+   */
+
+  EventAlert.prototype._ignore = function(options) {
+    return this.engine.chatManager.request('engine_chat:alert:ignore', options);
+  };
+
+  return EventAlert;
+
+})();
+
+Promise.toPromise(EventAlert, null, ['_updateCacheWithStatus']);
+
+module.exports = EventAlert;
+
+
+
+},{"../../utils/promise":32,"../chatManagerUtil":10,"debug":38}],9:[function(require,module,exports){
+'use strict';
+var ChatAlerts, ConfirmAlert, Promise, chatManagerUtil, debug;
+
+debug = require('debug')('engine:chat:alerts');
+
+chatManagerUtil = require('../chatManagerUtil');
+
+Promise = require('../../utils/promise');
+
+ConfirmAlert = require('./confirmAlert');
+
+
+/*
+  通知管理类
+ */
+
+ChatAlerts = (function() {
+
+  /*
+    @nodoc
+   */
+  function ChatAlerts(engine) {
+    this.engine = engine;
+    void 0;
+  }
+
+
+  /*
+    @nodoc
+   */
+
+  ChatAlerts.prototype._loadWithCache = function(options) {
+    return this.engine.chatManager.dbUtil.getDataAfterMerged('alerts').then(function(data) {
+      debug('load alerts with cache', data);
+      return data.newestDatas;
+    });
+  };
+
+
+  /*
+    加载该用户所有未处理过的事件，如果开起了缓存，就会将服务器返回的事件列表存入缓存，否则不做缓存操作。
+  
+    @example 加载该用户所有未处理过的通知（Promise）
+      chatManager.alerts.load().then(function(alerts) {
+        // 对返回的通知列表做进一步处理
+      }).catch(function(err) {
+        // 处理 error
+      });;
+  
+    @example 加载该用户所有未处理过的通知（回调）
+      onSuccess = function(alerts) {
+        // 对返回的通知列表做进一步处理
+      };
+  
+      onError = function(err) {
+        // 处理 error
+      };
+  
+      chatManager.alerts.load({
+        onSuccess: onSuccess,
+        onError: onError
+      });
+  
+    @param [Object] options 参数
+    @option options [Function] onSuccess 成功后回调的函數，可选
+    @option options [Function] onError 失败后回调的函數，可选
+    @return [void, Promise] 如果 options 中含有 onSuccess 或者 onError 则无返回值，否则返回 Promise
+   */
+
+  ChatAlerts.prototype.load = function(options) {
+    var _load, promiseOptions, ref;
+    if ((ref = this.engine.options.chat) != null ? ref.enableCache : void 0) {
+      _load = this._loadWithCache;
+    } else {
+      _load = this._getAlerts;
+    }
+    promiseOptions = chatManagerUtil.getPromiseOption(options);
+    return _load.call(this, promiseOptions).then((function(_this) {
+      return function(_alerts) {
+        var alert, alerts;
+        alerts = (function() {
+          var i, len, results;
+          results = [];
+          for (i = 0, len = _alerts.length; i < len; i++) {
+            alert = _alerts[i];
+            if (alert.status === 'pending') {
+              results.push(new ConfirmAlert(alert, this.engine));
+            }
+          }
+          return results;
+        }).call(_this);
+        return typeof options.onSuccess === "function" ? options.onSuccess(alerts) : void 0;
+      };
+    })(this))["catch"](function(err) {
+      return typeof options.onError === "function" ? options.onError(err) : void 0;
+    });
+  };
+
+
+  /*
+   @nodoc
+   */
+
+  ChatAlerts.prototype.formatEventData = function(eventData) {
+    var alert;
+    alert = new ConfirmAlert(eventData, this.engine);
+    alert._updateCacheWithStatus('pending');
+    return alert;
+  };
+
+
+  /*
+    @nodoc
+   */
+
+  ChatAlerts.prototype._getAlerts = function(options) {
+    return this.engine.chatManager.request('engine_chat:alert:get', options);
+  };
+
+  return ChatAlerts;
+
+})();
+
+Promise.toPromise(ChatAlerts, null, ['_loadWithCache', 'formatEventData']);
+
+module.exports = ChatAlerts;
+
+
+
+},{"../../utils/promise":32,"../chatManagerUtil":10,"./confirmAlert":7,"debug":38}],10:[function(require,module,exports){
+'use strict';
+var Promise, Protocol;
+
+Promise = require('../utils/promise');
+
+Protocol = require('../protocol');
+
+exports._separateOptionsAndHandlers = function(originalOptions) {
+  var handlers, k, options, v;
+  options = {};
+  handlers = {};
+  for (k in originalOptions) {
+    v = originalOptions[k];
+    if (typeof v === 'function') {
+      handlers[k] = v;
+    } else {
+      options[k] = v;
+    }
+  }
+  return [options, handlers];
+};
+
+exports.getPromiseOption = function(options) {
+  var handlers, optionsCopy, ref;
+  ref = exports._separateOptionsAndHandlers(options), optionsCopy = ref[0], handlers = ref[1];
+  return optionsCopy;
+};
+
+
+
+},{"../protocol":29,"../utils/promise":32}],11:[function(require,module,exports){
+'use strict';
+var ChatConversation, EventEmitter, ImageUploader, Messages, Promise, VideoUploader, VoiceUploader, chatManagerUtil, debug,
+  extend = function(child, parent) { for (var key in parent) { if (hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
+  hasProp = {}.hasOwnProperty;
+
+debug = require('debug')('engine:chat:ChatConversation');
+
+Messages = require('../messages');
+
+chatManagerUtil = require('../chatManagerUtil');
+
+ImageUploader = require('../uploader/imageUploader');
+
+VoiceUploader = require('../uploader/voiceUploader');
+
+VideoUploader = require('../uploader/videoUploader');
+
+EventEmitter = require('../../utils/eventEmitter');
+
+Promise = require('../../utils/promise');
+
+
+/*
+  会话类
+
+  属性
+  --------------------------------------------------------
+  - **type**  (String) - 会话类型，目前会话类型有： singleChat（私聊）， groupChat（群聊）
+  - **target**  (String) - 会话的唯一标识
+  - **unreadMessageCount**  (Number) - 未读消息数
+  - **lastActiveAt**  (String) - 最后一次更新时间
+  - **lastMessage**  (Object) - 最后一条消息
+  - **extra** (Object) - 附加信息，用于实现应用自定义业务逻辑，只读。可通过 Open API 进行设置
+
+  事件
+  -------------------------------
+  - **message:new** 用来监听新消息，处理函数的参数如下：
+      - **message** (Object) ： 新消息内容，该消息结构如下：
+
+          ```js
+          {
+            "messageId": 300,
+            // singleChat（单聊）或 groupChat （群聊）
+            "type": "singleChat",
+            // 来自谁，userId
+            "from": "1111",
+            // 发给谁，userId 或 groupId
+            "to": "1112",
+            "content": {
+              // 消息类型，type 枚举： text, image, voice, video, location, event
+              "type": "text",
+              // 消息内容，目前支持的消息内容有： text（文本消息），file（多媒体消息），event（事件消息），location（地理位置消息）
+              "text": "Hello World!",
+              // 可选，附加信息，用于实现应用自定义业务逻辑
+              "extra": {}
+            },
+            "createdAt": "2015-01-25T07:47:09.678Z"
+          }
+          ```
+ */
+
+ChatConversation = (function(superClass) {
+  extend(ChatConversation, superClass);
+
+
+  /*
+    @nodoc
+   */
+
+  function ChatConversation(options, engine, isTemporary) {
+    var ref;
+    if (options == null) {
+      options = {};
+    }
+    this.engine = engine;
+    if (isTemporary == null) {
+      isTemporary = false;
+    }
+    this.type = options.type, this.target = options.target, this.unreadMessageCount = options.unreadMessageCount, this.lastActiveAt = options.lastActiveAt, this.lastMessage = options.lastMessage, this.extra = options.extra;
+    if (this.unreadMessageCount == null) {
+      this.unreadMessageCount = 0;
+    }
+    if (isTemporary) {
+      this.isTemporary = true;
+    }
+    this.lastActiveAt || (this.lastActiveAt = new Date().toISOString());
+    this.messages = new Messages(this.engine);
+    if ((ref = this.engine.options.chat) != null ? ref.enableMediaMessage : void 0) {
+      this.imageUploader = new ImageUploader(this.engine);
+      this.voiceUploader = new VoiceUploader(this.engine);
+      this.videoUploader = new VideoUploader(this.engine);
+    }
+  }
+
+
+  /*
+    获取当前会话消息
+  
+    @example 获取会话消息（Promise），默认为20条
+      conversation.loadMessages().then(function(messages) {
+        // 对返回的消息列表做进一步处理
+      }).catch(function(err) {
+        // 处理 error
+      });
+  
+    @example 获取会话消息（回调），默认为20条
+      onSuccess = function(messages) {
+        // 对返回的消息列表做进一步处理
+      };
+  
+      onError = function(err) {
+        // 处理 error
+      };
+  
+      conversation.loadMessages({
+        onSuccess: onSuccess,
+        onError: onError
+      });
+  
+    @param [Object] options 参数
+    @option options [Number] startMessageId 起始消息的id，可选
+    @option options [Number] endMessageId 最后一条消息的id，可选
+    @option options [Number] limit 范围，默认为20条，可选
+    @option options [Function] onSuccess 成功后回调的函數，可选
+    @option options [Function] onError 失败后回调的函數，可选
+    @return [void, Promise] 如果 options 中含有 onSuccess 或者 onError 则无返回值，否则返回 Promise
+   */
+
+  ChatConversation.prototype.loadMessages = function(options) {
+    if (options == null) {
+      options = {};
+    }
+    options.type = this.type;
+    options.target = this.target;
+    return this.messages.load(options);
+  };
+
+
+  /*
+    重置未读消息数
+  
+    @example 将会话未读消息数重置为 0
+      conversation.resetUnread()
+    @return [void]
+   */
+
+  ChatConversation.prototype.resetUnread = function() {
+    this.unreadMessageCount = 0;
+    this._resetUnread({
+      type: this.type,
+      target: this.target
+    });
+    return this.updateCache();
+  };
+
+
+  /*
+    @nodoc
+   */
+
+  ChatConversation.prototype.updateCache = function(options) {
+    var ref, ref1;
+    if (options != null) {
+      this.unreadMessageCount = options.unreadMessageCount, this.lastActiveAt = options.lastActiveAt, this.lastMessage = options.lastMessage, this.extra = options.extra;
+    }
+    if (!((ref = this.engine.options.chat) != null ? ref.enableCache : void 0) || this.isTemporary) {
+      return;
+    }
+    return (ref1 = this.engine.chatManager.dbUtil) != null ? ref1.openDB().then((function(_this) {
+      return function(db) {
+        var conversation, ref2;
+        conversation = {
+          type: _this.type,
+          target: _this.target,
+          unreadMessageCount: _this.unreadMessageCount,
+          lastMessage: _this.lastMessage,
+          lastActiveAt: _this.lastActiveAt,
+          extra: _this.extra
+        };
+        debug('update conversation cache', conversation);
+        return (ref2 = db.conversations) != null ? ref2.update(conversation) : void 0;
+      };
+    })(this)) : void 0;
+  };
+
+
+  /*
+    发送消息
+  
+    @example 发送消息（Promise）
+      conversation.sendMessage({
+        type: 'text',
+        text: 'Hello World!',
+        // 可选，附加信息，用于实现应用自定义业务逻辑
+        extra: {}
+      }).then(function(messages) {
+        // 对返回的数据做进一步处理
+      }).catch(function(err) {
+        // 处理 error
+      });
+  
+    @example 发送消息（回调）
+      onSuccess = function(messages) {
+        // 对返回的数据做进一步处理
+      };
+  
+      onError = function(err) {
+        // 处理 error
+      };
+  
+      conversation.sendMessage({
+        type: 'text',
+        text: 'Hello World!',
+        // 可选，附加信息，用于实现应用自定义业务逻辑
+        extra: {},
+        onSuccess: onSuccess,
+        onError: onError
+      })
+  
+    @param [Object] options 参数
+    @option options [String] type 消息类型，type 取值有： text, image, voice, video, location
+    @option options [String] text 文本消息内容，对应的 type 为 text， 可选，仅在文本消息时传递该参数
+    @option options [Object] file 多媒体消息内容，对应的 type 为 image, voice, video， 可选，仅在多媒体消息时传递该参数
+    @option options [Object] location 地理位置消息内容，对应的 type 为 location， 可选，仅在地理位置消息时传递该参数
+    @option options [Object] extra 附加信息，用于实现应用自定义业务逻辑，可选
+    @option options [Function] onSuccess 成功后回调的函數，可选
+    @option options [Function] onError 失败后回调的函數，可选
+  
+    @return [void, Promise] 如果 options 中含有 onSuccess 或者 onError 则无返回值，否则返回 Promise
+   */
+
+  ChatConversation.prototype.sendMessage = function(options) {
+    var content, message, ref;
+    ref = chatManagerUtil._separateOptionsAndHandlers(options), content = ref[0], message = ref[1];
+    message.type = this.type;
+    message.to = this.target;
+    if (message.content == null) {
+      message.content = content;
+    }
+    return this.messages.send(message);
+  };
+
+
+  /*
+    删除会话
+  
+    @example 删除会话（Promise）
+      conversation.delete().then(function() {
+        // 删除成功
+      }).catch(function(err) {
+        // 处理 error
+      });
+  
+    @example 删除会话（回调）
+      onSuccess = function(){
+        // 删除成功
+      };
+  
+      onError = function(err) {
+        // 处理 error
+      };
+  
+      conversation.delete({
+        onSuccess: onSuccess,
+        onError: onError
+      })
+  
+    @return [void, Promise] 如果 options 中含有 onSuccess 或者 onError 则无返回值，否则返回 Promise
+   */
+
+  ChatConversation.prototype["delete"] = function(options) {
+    return this._deleteConversation({
+      type: this.type,
+      target: this.target
+    }).then((function(_this) {
+      return function(result) {
+        var ref, ref1;
+        _this.engine.chatManager.conversations.removeConversationFromBuffer(_this.target);
+        if ((ref = _this.engine.options.chat) != null ? ref.enableCache : void 0) {
+          return (ref1 = _this.engine.chatManager.dbUtil) != null ? ref1.openDB().then(function(db) {
+            db.conversations.remove(_this.target);
+            return typeof options.onSuccess === "function" ? options.onSuccess() : void 0;
+          }) : void 0;
+        } else {
+          return typeof options.onSuccess === "function" ? options.onSuccess() : void 0;
+        }
+      };
+    })(this));
+  };
+
+
+  /*
+    获取 ImageUploader 对象，用于上传图片
+  
+    @example 获取 ImageUploader （Promise）
+      conversation.getImageUploader({
+        // 触发文件选择的 DOM 元素的 ID
+        browseButton: 'imageMessage',
+        // 可选，拖曳区域的 DOM 元素的 ID，可实现拖曳上传
+        dropElementId: 'messageContainer',
+        // 可选，附加信息，用于实现应用自定义业务逻辑
+        extra: {}
+      }).then(function(imageUploader) {
+        // 可以在 imageUploader 上绑定事件
+      }).catch(function(err) {
+        // 处理 error
+      });
+  
+    @example 获取 ImageUploader（回调）
+      onSuccess = function(imageUploader) {
+        // 可以在 imageUploader 上绑定事件
+      };
+  
+      onError = function(err) {
+        // 处理 error
+      };
+  
+      conversation.getImageUploader({
+        browseButton: 'imageMessage',
+        dropElement: 'messageContainer',
+        extra: {},
+        onSuccess: onSuccess,
+        onError: onError
+      })
+  
+    @param [object] options 初始化 ImageUploader 的参数
+    @option options [DOM, String] browseButton 触发选择文件的点选按钮，**必需**，该参数的值可以为一个 DOM 元素的 id,也可是 DOM 元素本身。
+    @option options [DOM, String] dropElement
+      拖曳上传区域元素的ID，拖曳文件或文件夹后可触发上传，**可选**，，该参数的值可以为一个 DOM 元素的 id,也可是 DOM 元素本身，目前只有 html5 上传方式才支持拖拽上传。
+    @option options [Object] extra 附加信息，用于实现应用自定义业务逻辑，可选
+    @option options [Function] onSuccess 成功后回调的函數，可选
+    @option options [Function] onError 失败后回调的函數，可选
+    @return [void, Promise] 如果 options 中含有 onSuccess 或者 onError 则无返回值，否则返回 Promise
+   */
+
+  ChatConversation.prototype.getImageUploader = function(options) {
+    var ref;
+    if (options == null) {
+      options = {};
+    }
+    if (!((ref = this.engine.options.chat) != null ? ref.enableMediaMessage : void 0)) {
+      return options.onError('You must set enableMediaMessage');
+    }
+    if ((options.browseButton == null) || options.browseButton === '') {
+      return options.onError('BrowseButton does not exist');
+    }
+    return this.imageUploader.init({
+      browseButton: options.browseButton,
+      dropElement: options.dropElement,
+      target: this.target,
+      type: this.type,
+      extra: options.extra
+    }).then((function(_this) {
+      return function() {
+        return typeof options.onSuccess === "function" ? options.onSuccess(_this.imageUploader) : void 0;
+      };
+    })(this))["catch"](function(err) {
+      return typeof options.onError === "function" ? options.onError(err) : void 0;
+    });
+  };
+
+
+  /*
+    获取 VoiceUploader 对象，用于上传语音
+  
+    @example 获取 VoiceUploader （Promise）
+      conversation.getVoiceUploader({
+        // 可选，附加信息，用于实现应用自定义业务逻辑
+        extra: {}
+      }).then(function(voiceUploader) {
+        // 可以在 voiceUploader 上绑定事件
+      }).catch(function(err) {
+        // 处理 error
+      });
+  
+    @example 获取 VoiceUploader（回调）
+      onSuccess = function(voiceUploader) {
+        // 可以在 voiceUploader 上绑定事件
+      };
+  
+      onError = function(err) {
+        // 处理 error
+      };
+  
+      conversation.getVoiceUploader({
+        extra: {},
+        onSuccess: onSuccess,
+        onError: onError
+      });
+  
+    @param [object] options 初始化 VoiceUploader 的参数
+    @option options [Object] extra 附加信息，用于实现应用自定义业务逻辑，可选
+    @option options [Function] onSuccess 成功后回调的函數，可选
+    @option options [Function] onError 失败后回调的函數，可选
+    @return [void, Promise] 如果 options 中含有 onSuccess 或者 onError 则无返回值，否则返回 Promise
+   */
+
+  ChatConversation.prototype.getVoiceUploader = function(options) {
+    var ref;
+    if (options == null) {
+      options = {};
+    }
+    if (!((ref = this.engine.options.chat) != null ? ref.enableMediaMessage : void 0)) {
+      return options.onError('You must set enableMediaMessage');
+    }
+    return this.voiceUploader.init({
+      target: this.target,
+      type: this.type,
+      extra: options.extra
+    }).then((function(_this) {
+      return function() {
+        return typeof options.onSuccess === "function" ? options.onSuccess(_this.voiceUploader) : void 0;
+      };
+    })(this))["catch"](function(err) {
+      return typeof options.onError === "function" ? options.onError(err) : void 0;
+    });
+  };
+
+
+  /*
+    获取 VideoUploader 对象，用于上传视频
+  
+    @example 获取 VideoUploader （Promise）
+      conversation.getVideoUploader({
+         // 可选，附加信息，用于实现应用自定义业务逻辑
+         extra: {}
+      }).then(function(videoUploader) {
+        // 可以在 videoUploader 上绑定事件
+      }).catch(function(err) {
+        // 处理 error
+      });
+  
+    @example 获取 VideoUploader（回调）
+      onSuccess = function(videoUploader) {
+        // 可以在 videoUploader 上绑定事件
+      };
+      onError = function(err) {
+        // 处理 error
+      };
+      conversation.getVideoUploader({
+        extra: {},
+        onSuccess: onSuccess,
+        onError: onError
+      });
+  
+    @param [object] options 初始化 VideoUploader 的参数
+    @option options [Object] extra 附加信息，用于实现应用自定义业务逻辑，可选
+    @option options [Function] onSuccess 成功后回调的函數，可选
+    @option options [Function] onError 失败后回调的函數，可选
+    @return [void, Promise] 如果 options 中含有 onSuccess 或者 onError 则无返回值，否则返回 Promise
+   */
+
+  ChatConversation.prototype.getVideoUploader = function(options) {
+    var ref;
+    if (options == null) {
+      options = {};
+    }
+    if (!((ref = this.engine.options.chat) != null ? ref.enableMediaMessage : void 0)) {
+      return options.onError('You must set enableMediaMessage');
+    }
+    return this.videoUploader.init({
+      target: this.target,
+      type: this.type,
+      extra: options.extra
+    }).then((function(_this) {
+      return function() {
+        return typeof options.onSuccess === "function" ? options.onSuccess(_this.videoUploader) : void 0;
+      };
+    })(this))["catch"](function(err) {
+      return typeof options.onError === "function" ? options.onError(err) : void 0;
+    });
+  };
+
+
+  /*
+    @nodoc
+   */
+
+  ChatConversation.prototype._deleteConversation = function(options) {
+    return this.engine.chatManager.request('engine_chat:conversation:delete', options);
+  };
+
+
+  /*
+    @nodoc
+   */
+
+  ChatConversation.prototype._resetUnread = function(options) {
+    return this.engine.chatManager.request('engine_chat:conversation:resetUnread', options);
+  };
+
+  return ChatConversation;
+
+})(EventEmitter);
+
+Promise.toPromise(ChatConversation, null, ['updateCache']);
+
+module.exports = ChatConversation;
+
+
+
+},{"../../utils/eventEmitter":30,"../../utils/promise":32,"../chatManagerUtil":10,"../messages":18,"../uploader/imageUploader":20,"../uploader/videoUploader":22,"../uploader/voiceUploader":23,"debug":38}],12:[function(require,module,exports){
+'use strict';
+var ChatConversations, Conversation, EventEmitter, Promise, chatManagerUtil, debug;
+
+debug = require('debug')('engine:chat:conversations');
+
+Conversation = require('./chatConversation');
+
+chatManagerUtil = require('../chatManagerUtil');
+
+Promise = require('../../utils/promise');
+
+EventEmitter = require('../../utils/eventEmitter');
+
+
+/*
+  会话管理类
+ */
+
+ChatConversations = (function() {
+
+  /*
+    @nodoc
+   */
+  function ChatConversations(engine) {
+    this.engine = engine;
+    this.initConversationBuffer();
+  }
+
+
+  /*
+    @nodoc
+   */
+
+  ChatConversations.prototype.initConversationBuffer = function() {
+    var conversation, ref, target;
+    ref = this._store != null;
+    for (target in ref) {
+      conversation = ref[target];
+      conversation.removeAllListeners();
+    }
+    return this._store = {};
+  };
+
+
+  /*
+    @nodoc
+   */
+
+  ChatConversations.prototype.removeConversationFromBuffer = function(target) {
+    var ref;
+    if ((ref = this._store[target]) != null) {
+      ref.removeAllListeners();
+    }
+    return delete this._store[target];
+  };
+
+
+  /*
+    @nodoc
+   */
+
+  ChatConversations.prototype._loadWithCache = function(options) {
+    return this.engine.chatManager.dbUtil.getDataAfterMerged('conversations').then((function(_this) {
+      return function(data) {
+        var conversation, i, len, ref, ref1, ref2;
+        debug('load conversations with cache', data);
+        ref = data.mergedDatas;
+        for (i = 0, len = ref.length; i < len; i++) {
+          conversation = ref[i];
+          if ((ref1 = _this._store[conversation.target]) != null) {
+            ref1.isTemporary = false;
+          }
+          if ((ref2 = _this._store[conversation.target]) != null) {
+            ref2.updateCache(conversation);
+          }
+        }
+        return data.newestDatas.filter(function(conversation) {
+          return !conversation.isRemoved;
+        });
+      };
+    })(this));
+  };
+
+
+  /*
+    @nodoc
+   */
+
+  ChatConversations.prototype._loadOneWithoutCache = function(options) {
+    var promiseOptions;
+    promiseOptions = chatManagerUtil.getPromiseOption(options);
+    return this._getConversations(promiseOptions).then(function(conversations) {
+      if ((conversations != null ? conversations.length : void 0) > 0) {
+        return conversations[0];
+      } else {
+        return promiseOptions;
+      }
+    });
+  };
+
+
+  /*
+    @nodoc
+   */
+
+  ChatConversations.prototype._loadOneWithCache = function(options) {
+    var ref;
+    return (ref = this.engine.chatManager.dbUtil) != null ? ref.openDB().then(function(db) {
+      return db.conversations.query('target').only(options.target).execute();
+    }).then((function(_this) {
+      return function(conversations) {
+        var newConversation, promiseOptions;
+        if (conversations.length > 0) {
+          return conversations[0];
+        } else {
+          newConversation = null;
+          promiseOptions = chatManagerUtil.getPromiseOption(options);
+          return _this._getConversations(promiseOptions).then(function(newConversations) {
+            var conversation;
+            if ((newConversations != null ? newConversations.length : void 0) > 0) {
+              conversation = newConversations[0];
+              conversation.isNew = true;
+              return conversation;
+            } else {
+              conversation = promiseOptions;
+              conversation.isTemporary = true;
+              return conversation;
+            }
+          });
+        }
+      };
+    })(this)) : void 0;
+  };
+
+
+  /*
+    获取会话列表，如果开起了缓存，就会将服务器返回的会话列表存入缓存，否则不做缓存操作。
+  
+    @example 获取会话列表（Promise）
+      chatManager.conversations.load().then(function(conversations) {
+        // 对返回的会话列表做进一步处理
+      }).catch(function(err) {
+        // 处理 error
+      });
+  
+    @example 获取会话列表（回调）
+      onSuccess = function(conversations) {
+        // 对返回的会话列表做进一步处理
+      };
+  
+      onError = function(err) {
+        // 处理 error
+      };
+  
+      chatManager.conversations.load({
+        onSuccess: onSuccess,
+        onError: onError
+      });
+  
+    @param [Object] options 参数
+    @option options [Function] onSuccess 成功后回调的函數，可选
+    @option options [Function] onError 失败后回调的函數，可选
+    @return [void, Promise] 如果 options 中含有 onSuccess 或者 onError 则无返回值，否则返回 Promise
+   */
+
+  ChatConversations.prototype.load = function(options) {
+    var _load, promiseOptions, ref;
+    if (options == null) {
+      options = {};
+    }
+    if ((ref = this.engine.options.chat) != null ? ref.enableCache : void 0) {
+      _load = this._loadWithCache;
+    } else {
+      _load = this._getConversations;
+    }
+    promiseOptions = chatManagerUtil.getPromiseOption(options);
+    return _load.call(this, promiseOptions).then((function(_this) {
+      return function(newConversations) {
+        var base, conversation, conversations, i, len, name;
+        conversations = [];
+        for (i = 0, len = newConversations.length; i < len; i++) {
+          conversation = newConversations[i];
+          if ((base = _this._store)[name = conversation.target] == null) {
+            base[name] = new Conversation(conversation, _this.engine);
+          }
+          conversations.push(_this._store[conversation.target]);
+        }
+        return typeof options.onSuccess === "function" ? options.onSuccess(conversations) : void 0;
+      };
+    })(this))["catch"](function(err) {
+      return typeof options.onError === "function" ? options.onError(err) : void 0;
+    });
+  };
+
+
+  /*
+    获取特定的会话，如果会话不存在，会根据 options 的参数创建一个新的会话返回。
+  
+    @example 获取特定的会话（promise）
+      chatManager.conversations.loadOne({
+        type: 'singleChat',
+        target: '1111'
+      }).then(function(conversation) {
+        // 对返回的特定的会话做进一步处理
+      }).catch(function(err) {
+        // 处理 error
+      });
+  
+    @example 获取特定的会话（回调）
+      onSuccess = function(conversation) {
+        // 对返回的特定的会话做进一步处理
+      };
+  
+      onError = function(err) {
+        // 处理 error
+      };
+  
+      chatManager.conversations.loadOne({
+        type: 'singleChat',
+        target: '1111',
+        onSuccess: onSuccess,
+        onError: onError
+      });
+  
+    @param [Object] options 参数
+    @option options [String] type Conversation 的类型， singleChat（单聊） 或 groupChat （群聊），可选
+    @option options [String] target 聊天的对象， userId 或 groupId ，可选
+    @option options [Function] onSuccess 成功后回调的函數，可选
+    @option options [Function] onError 失败后回调的函數，可选
+    @return [void, Promise] 如果 options 中含有 onSuccess 或者 onError 则无返回值，否则返回 Promise
+   */
+
+  ChatConversations.prototype.loadOne = function(options) {
+    var _loadOne, promiseOptions, ref;
+    if (!options.target) {
+      return options.onError('target is required');
+    } else if (this._store[options.target] != null) {
+      return options.onSuccess(this._store[options.target]);
+    } else if ((ref = this.engine.options.chat) != null ? ref.enableCache : void 0) {
+      _loadOne = this._loadOneWithCache;
+    } else {
+      _loadOne = this._loadOneWithoutCache;
+    }
+    promiseOptions = chatManagerUtil.getPromiseOption(options);
+    return _loadOne != null ? _loadOne.call(this, promiseOptions).then((function(_this) {
+      return function(conversation) {
+        var base, name;
+        if (conversation != null) {
+          if ((base = _this._store)[name = conversation.target] == null) {
+            base[name] = new Conversation(conversation, _this.engine, conversation.isTemporary);
+          }
+          if (conversation.isNew) {
+            _this._store[conversation.target].updateCache();
+          }
+          return typeof options.onSuccess === "function" ? options.onSuccess(_this._store[conversation.target]) : void 0;
+        } else {
+          return options.onSuccess();
+        }
+      };
+    })(this))["catch"](function(err) {
+      return typeof options.onError === "function" ? options.onError(err) : void 0;
+    }) : void 0;
+  };
+
+
+  /*
+   @nodoc
+   */
+
+  ChatConversations.prototype.handleEvent = function(event) {
+    var conversation, ref, ref1;
+    debug('Conversation handleEvent dispatcher', event);
+    switch (event.name) {
+      case 'message:new':
+        conversation = event.data.type === 'singleChat' ? this._store[event.data.from] : this._store[event.data.to];
+        if (!conversation) {
+          return;
+        }
+        conversation.lastMessage = event.data;
+        conversation.unreadMessageCount++;
+        conversation.lastActiveAt = event.data.createdAt;
+        conversation.updateCache();
+        if ((ref = this.engine.options.chat) != null ? ref.enableCache : void 0) {
+          return (ref1 = this.engine.chatManager.dbUtil) != null ? ref1.openDB().then(function(db) {
+            var message;
+            message = event.data;
+            message.id = message.from + message.to + message.messageId;
+            message.target = conversation.target;
+            return db.messages.update(message).then(function() {
+              return conversation.trigger(event.name, event.data);
+            });
+          }) : void 0;
+        } else {
+          return conversation.trigger(event.name, event.data);
+        }
+    }
+  };
+
+
+  /*
+   @nodoc
+   */
+
+  ChatConversations.prototype._getConversations = function(options) {
+    return this.engine.chatManager.request('engine_chat:conversation:get', options);
+  };
+
+  return ChatConversations;
+
+})();
+
+Promise.toPromise(ChatConversations, ['load', 'loadOne', '_getConversations']);
+
+module.exports = ChatConversations;
+
+
+
+},{"../../utils/eventEmitter":30,"../../utils/promise":32,"../chatManagerUtil":10,"./chatConversation":11,"debug":38}],13:[function(require,module,exports){
+'use strict';
+var DbUtil, Promise, dbVersion, debug, loadJS, schema;
+
+debug = require('debug')('engine:chat:dbUtil');
+
+loadJS = require('../utils/requester/loadJS');
+
+Promise = require('../utils/promise');
+
+schema = {
+  conversations: {
+    key: {
+      keyPath: 'target'
+    },
+    indexes: {
+      lastActiveAt: {},
+      target: {}
+    }
+  },
+  messages: {
+    key: {
+      keyPath: 'id'
+    },
+    indexes: {
+      messageId: {},
+      createdAt: {},
+      from: {},
+      to: {},
+      type: {},
+      target: {}
+    }
+  },
+  groups: {
+    key: {
+      keyPath: 'groupId'
+    },
+    indexes: {
+      lastActiveAt: {},
+      groupId: {},
+      isRemoved: {}
+    }
+  },
+  alerts: {
+    key: {
+      keyPath: 'alertId'
+    },
+    indexes: {
+      lastActiveAt: {},
+      from: {},
+      group: {},
+      alertId: {},
+      status: {},
+      to: {},
+      type: {}
+    }
+  },
+  tmpMessages: {
+    key: {
+      keyPath: 'id',
+      autoIncrement: true
+    },
+    indexes: {
+      messageId: {},
+      createdAt: {},
+      from: {},
+      to: {},
+      type: {},
+      target: {}
+    }
+  }
+};
+
+dbVersion = 2;
+
+
+/*
+  @nodoc
+ */
+
+DbUtil = (function() {
+  function DbUtil(engine) {
+    this.engine = engine;
+    void 0;
+  }
+
+  DbUtil.prototype.handelDbException = function(message, err) {
+    var ref, ref1;
+    console.warn(message);
+    if ((ref = this.server) != null) {
+      if (typeof ref.close === "function") {
+        ref.close();
+      }
+    }
+    this.server = null;
+    if (err != null) {
+      debug(err);
+    }
+    return (ref1 = this.engine.options.chat) != null ? ref1.enableCache = false : void 0;
+  };
+
+  DbUtil.prototype.initLocalDB = function() {
+    return this.openDB()["catch"]((function(_this) {
+      return function(err) {
+        _this.handelDbException('Your browser does not support local storage', err);
+        return Promise.resolve();
+      };
+    })(this));
+  };
+
+  DbUtil.prototype.openDB = function() {
+    var name, ref, ref1, self;
+    if (!((ref = this.engine.options.chat) != null ? ref.enableCache : void 0)) {
+      return Promise.reject('You must set enableCache');
+    }
+    name = this.engine.chatManager.user.userId;
+    if (!name) {
+      return Promise.reject('You must login firstly.');
+    }
+    if (("chatManagerDB-" + name) === this.dbName) {
+      if (this.server) {
+        return Promise.resolve(this.server);
+      }
+    } else {
+      if ((ref1 = this.server) != null) {
+        ref1.close();
+      }
+    }
+    debug('Switch db', this.dbName + (" -> chatManagerDB-" + name));
+    this.dbName = "chatManagerDB-" + name;
+    self = this;
+    return new Promise(function(resolve, reject) {
+      return loadJS.require('enableCache', self.engine.options.basePath).then(function() {
+        return db.open({
+          server: self.dbName,
+          version: dbVersion,
+          schema: schema
+        });
+      }).then(function(s) {
+        if (s['conversations'] == null) {
+          self.handelDbException('Can not open db, you can try again after cleaned cache');
+          return reject();
+        } else {
+          self.server = s;
+          return resolve(s);
+        }
+      })["catch"](function(err) {
+        self.handelDbException('Your browser does not support local storage', err);
+        return reject(err);
+      });
+    });
+  };
+
+  DbUtil.prototype.clearCache = function() {
+    var ref, ref1, ref2, ref3, ref4, ref5, ref6;
+    if (!(((ref = this.engine) != null ? (ref1 = ref.options.chat) != null ? ref1.enableCache : void 0 : void 0) && this.server)) {
+      return;
+    }
+    debug('clean cache', this.dbName);
+    if ((ref2 = this.server.messages) != null) {
+      ref2.clear();
+    }
+    if ((ref3 = this.server.conversations) != null) {
+      ref3.clear();
+    }
+    if ((ref4 = this.server.groups) != null) {
+      ref4.clear();
+    }
+    if ((ref5 = this.server.alerts) != null) {
+      ref5.clear();
+    }
+    if ((ref6 = this.server) != null) {
+      if (typeof ref6.close === "function") {
+        ref6.close();
+      }
+    }
+    this.server = null;
+    return typeof indexedDB !== "undefined" && indexedDB !== null ? indexedDB.deleteDatabase(this.dbName) : void 0;
+  };
+
+  DbUtil.prototype.getRemoteData = function(schema, options) {
+    var dataSource, needSendAck;
+    if (options == null) {
+      options = {};
+    }
+    dataSource = {
+      conversations: 'engine_chat:conversation:get',
+      alerts: 'engine_chat:alert:get',
+      groups: 'engine_chat:group:get',
+      messages: 'engine_chat:message:get'
+    };
+    if (!dataSource[schema]) {
+      return Promise.resolve([]);
+    }
+    if (schema === 'message') {
+      needSendAck = true;
+    }
+    return new Promise((function(_this) {
+      return function(resolve, reject) {
+        options.onSuccess = function(result) {
+          if (schema === 'messages') {
+            result.id = result.from + result.to + result.messageId;
+          }
+          return resolve(result);
+        };
+        options.onError = function(err) {
+          return reject(err);
+        };
+        return _this.engine.chatManager.request(dataSource[schema], options, needSendAck);
+      };
+    })(this));
+  };
+
+  DbUtil.prototype.match = function(options) {
+    return function(data) {
+      var k, v;
+      for (k in options) {
+        v = options[k];
+        if (k === 'lastActiveAt') {
+          continue;
+        }
+        if ((data[k] != null) && data[k] !== v) {
+          return false;
+        }
+      }
+      return true;
+    };
+  };
+
+  DbUtil.prototype.getDataAfterMerged = function(schema, options) {
+    var scope;
+    if (options == null) {
+      options = {};
+    }
+    scope = {};
+    return this.openDB().then((function(_this) {
+      return function(server) {
+        scope.db = server;
+        return scope.db[schema].query('lastActiveAt').filter(_this.match(options)).desc().execute();
+      };
+    })(this)).then((function(_this) {
+      return function(data) {
+        var ref;
+        if (data == null) {
+          data = [];
+        }
+        scope.data = data;
+        if (((ref = data[0]) != null ? ref.lastActiveAt : void 0) != null) {
+          options.lastActiveAt = data[0].lastActiveAt;
+        }
+        return _this.getRemoteData(schema, options);
+      };
+    })(this)).then(function(remoteDatas) {
+      var i, len, promises, remoteData;
+      if (remoteDatas == null) {
+        remoteDatas = [];
+      }
+      scope.remoteDatas = remoteDatas;
+      promises = [];
+      for (i = 0, len = remoteDatas.length; i < len; i++) {
+        remoteData = remoteDatas[i];
+        promises.push(scope.db[schema].update(remoteData));
+      }
+      return Promise.all(promises);
+    }).then((function(_this) {
+      return function() {
+        return scope.db[schema].query('lastActiveAt').filter(_this.match(options)).desc().execute();
+      };
+    })(this)).then(function(newestDatas) {
+      if (newestDatas == null) {
+        newestDatas = [];
+      }
+      return {
+        newestDatas: newestDatas,
+        mergedDatas: scope.remoteDatas
+      };
+    });
+  };
+
+  return DbUtil;
+
+})();
+
+module.exports = DbUtil;
+
+
+
+},{"../utils/promise":32,"../utils/requester/loadJS":35,"debug":38}],14:[function(require,module,exports){
+'use strict';
+var ChatGroup, Promise, Users, chatManagerUtil, debug;
+
+debug = require('debug')('engine:chat:group');
+
+Users = require('../users');
+
+chatManagerUtil = require('../chatManagerUtil');
+
+Promise = require('../../utils/promise');
+
+
+/*
+  群组类
+
+  属性
+  --------------------------------------------------------
+
+  - **groupId**  (String) - 群组的唯一表示
+  - **isPublic**  (Boolean) - 是否公开
+  - **userCanInvite**  (Boolean) - 除创建者（owner）外，其他群用户是否可以发送加群邀请
+  - **owner** (String) - 群创建者
+  - **userCount**  (Number) - 当前群组用户数
+  - **userCountLimit**  (Number) - 群用户数上限
+  - **isRemoved**  (Boolean) - 是否被删除了
+  - **lastActiveAt**  (String) - 最后更新时间
+ */
+
+ChatGroup = (function() {
+
+  /*
+    @nodoc
+   */
+  function ChatGroup(options, engine) {
+    this.engine = engine;
+    this.groupId = options.groupId, this.owner = options.owner, this.isPublic = options.isPublic, this.userCanInvite = options.userCanInvite, this.userCount = options.userCount, this.userCountLimit = options.userCountLimit, this.isRemoved = options.isRemoved;
+    this.lastActiveAt = options.lastActiveAt;
+    this.users = new Users(this.engine);
+  }
+
+
+  /*
+    获取群组成员列表
+  
+    @example 获取群组成员列表（Promise）
+      group.loadUsers().then(function(users) {
+        // 对返回的群组成员列表做进一步处理
+      }).catch(function(err) {
+        // 处理 error
+      });
+  
+    @example 获取群组成员列表（回调）
+      onSuccess = function(users) {
+        // 对返回的群组成员列表做进一步处理
+      };
+  
+      onError = function(err) {
+        // 处理 error
+      };
+  
+      group.loadUsers({
+        onSuccess: onSuccess,
+        onError: onError
+      });
+  
+    @param [Object] options 参数
+    @option options [Function] onSuccess 成功后回调的函數，可选
+    @option options [Function] onError 失败后回调的函數，可选
+    @return [void, Promise] 如果 options 中含有 onSuccess 或者 onError 则无返回值，否则返回 Promise
+   */
+
+  ChatGroup.prototype.loadUsers = function(options) {
+    options.groupId = this.groupId;
+    return this.users.loadGroupUsers(options);
+  };
+
+
+  /*
+    邀请用户加入群组
+  
+    @example 邀请用户加入群组（Promise）
+      group.inviteUsers({
+        userIds: ['1111']
+      }).then(function() {
+        // 邀请成功
+      }).catch(function(err) {
+        // 处理 error
+      });
+  
+    @example 邀请用户加入群组（回调）
+      onSuccess = function() {
+        // 邀请成功
+      };
+  
+      onError = function(err) {
+        // 处理 error
+      };
+  
+      group.inviteUsers({
+        userIds: ['1111'],
+        onSuccess: onSuccess,
+        onError: onError
+      });
+  
+    @param [Object] options 参数
+    @option options [Array<String>] userIds 一组用户的 id
+    @option options [Function] onSuccess 成功后回调的函數，可选
+    @option options [Function] onError 失败后回调的函數，可选
+    @return [void, Promise] 如果 options 中含有 onSuccess 或者 onError 则无返回值，否则返回 Promise
+   */
+
+  ChatGroup.prototype.inviteUsers = function(options) {
+    options.groupId = this.groupId;
+    return this._inviteUsers(options);
+  };
+
+
+  /*
+    从群组中移出成员
+  
+    @example 从群组中移出成员（Promise）
+      group.removeUsers({
+        userIds: ['1111']
+      }).then(function(users) {
+        // 移除某用户成功
+      }).catch(function(err) {
+        // 处理 error
+      });
+  
+    @example 从群组中移出成员（回调）
+      onSuccess = function(users) {
+        // 移除某用户成功
+      };
+  
+      onError = function(err) {
+        // 处理 error
+      };
+  
+      group.removeUsers({
+        userIds: ['1111'],
+        onSuccess: onSuccess,
+        onError: onError
+      });
+  
+    @param [Object] options 参数
+    @option options [Array<String>] userIds 一组用户的 id
+    @option options [Function] onSuccess 成功后回调的函數，可选
+    @option options [Function] onError 失败后回调的函數，可选
+    @return [void, Promise] 如果 options 中含有 onSuccess 或者 onError 则无返回值，否则返回 Promise
+   */
+
+  ChatGroup.prototype.removeUsers = function(options) {
+    options.groupId = this.groupId;
+    return this._removeUsers(options);
+  };
+
+
+  /*
+    离开群组
+  
+    @example 离开群组（Promise）
+      group.leave().then(function() {
+        // 成功离开群组
+      }).catch(function(err) {
+        // 处理 error
+      });
+  
+    @example 离开群组（回调）
+      onSuccess = function() {
+        // 成功离开群组
+      };
+  
+      onError = function(err) {
+        // 处理 error
+      };
+  
+      group.leave({
+        onSuccess: onSuccess,
+        onError: onError
+      });
+  
+    @param [Object] options 参数
+    @option options [Function] onSuccess 成功后回调的函數，可选
+    @option options [Function] onError 失败后回调的函數，可选
+    @return [void, Promise] 如果 options 中含有 onSuccess 或者 onError 则无返回值，否则返回 Promise
+   */
+
+  ChatGroup.prototype.leave = function(options) {
+    var promiseOptions;
+    if (options == null) {
+      options = {};
+    }
+    options.groupId = this.groupId;
+    promiseOptions = chatManagerUtil.getPromiseOption(options);
+    return this._leaveGroup(promiseOptions).then((function(_this) {
+      return function() {
+        var ref, ref1;
+        _this.engine.chatManager.conversations.removeConversationFromBuffer(_this.groupId);
+        if ((ref = _this.engine.options.chat) != null ? ref.enableCache : void 0) {
+          return (ref1 = _this.engine.chatManager.dbUtil) != null ? ref1.openDB().then(function(db) {
+            return Promise.all([db.conversations.remove(_this.groupId), db.groups.remove(_this.groupId)]);
+          }).then(function() {
+            return typeof options.onSuccess === "function" ? options.onSuccess() : void 0;
+          })["catch"](function() {
+            return typeof options.Error === "function" ? options.Error() : void 0;
+          }) : void 0;
+        } else {
+          return typeof options.onSuccess === "function" ? options.onSuccess() : void 0;
+        }
+      };
+    })(this))["catch"](function(err) {
+      return typeof options.Error === "function" ? options.Error(err) : void 0;
+    });
+  };
+
+
+  /*
+    @nodoc
+   */
+
+  ChatGroup.prototype._inviteUsers = function(options) {
+    return this.engine.chatManager.request('engine_chat:group:joinInvitation:send', options);
+  };
+
+
+  /*
+    @nodoc
+   */
+
+  ChatGroup.prototype._removeUsers = function(options) {
+    return this.engine.chatManager.request('engine_chat:group:removeUsers', options);
+  };
+
+
+  /*
+    @nodoc
+   */
+
+  ChatGroup.prototype._leaveGroup = function(options) {
+    return this.engine.chatManager.request('engine_chat:group:leave', options);
+  };
+
+  return ChatGroup;
+
+})();
+
+Promise.toPromise(ChatGroup, null, ['updateCache']);
+
+module.exports = ChatGroup;
+
+
+
+},{"../../utils/promise":32,"../chatManagerUtil":10,"../users":24,"debug":38}],15:[function(require,module,exports){
+'use strict';
+var ChatGroups, Group, Promise, chatManagerUtil, debug;
+
+debug = require('debug')('engine:chat:groups');
+
+chatManagerUtil = require('../chatManagerUtil');
+
+Group = require('./chatGroup');
+
+Promise = require('../../utils/promise');
+
+
+/*
+  群组管理类
+ */
+
+ChatGroups = (function() {
+
+  /*
+    @nodoc
+   */
+  function ChatGroups(engine) {
+    this.engine = engine;
+    void 0;
+  }
+
+
+  /*
+    @nodoc
+   */
+
+  ChatGroups.prototype._loadWithCache = function(options) {
+    var scope;
+    scope = {};
+    return this.engine.chatManager.dbUtil.getDataAfterMerged('groups', options).then((function(_this) {
+      return function(data) {
+        var ref;
+        debug('load groups with cache', data);
+        scope.data = data;
+        return (ref = _this.engine.chatManager.dbUtil) != null ? ref.openDB() : void 0;
+      };
+    })(this)).then(function(db) {
+      var group, groups, i, len, ref;
+      groups = scope.data.newestDatas;
+      ref = groups.slice(1);
+      for (i = 0, len = ref.length; i < len; i++) {
+        group = ref[i];
+        if (group.isRemoved) {
+          db.groups.remove(group.groupId);
+        }
+      }
+      return groups.filter(function(group) {
+        return !group.isRemoved;
+      });
+    });
+  };
+
+
+  /*
+    获取群组列表
+  
+    @example 获取群组列表（Promise）
+      chatManager.groups.load().then(function(groups) {
+        // 对返回的群组列表做进一步处理
+      }).catch(function(err) {
+        // 处理 error
+      });
+  
+    @example 获取群组列表（回调）
+      onSuccess = function(groups) {
+        // 对返回的群组列表做进一步处理
+      };
+  
+      onError = function(err) {
+        // 处理 error
+      };
+  
+      chatManager.groups.load({
+        onSuccess: onSuccess,
+        onError: onError
+      });
+  
+    @param [Object] options 参数
+    @option options [Function] onSuccess 成功后回调的函數，可选
+    @option options [Function] onError 失败后回调的函數，可选
+    @return [void, Promise] 如果 options 中含有 onSuccess 或者 onError 则无返回值，否则返回 Promise
+   */
+
+  ChatGroups.prototype.load = function(options) {
+    var _load, promiseOptions, ref;
+    if (options == null) {
+      options = {};
+    }
+    if (!((ref = this.engine.options.chat) != null ? ref.enableCache : void 0)) {
+      _load = this._getGroups;
+    } else {
+      _load = this._loadWithCache;
+    }
+    promiseOptions = chatManagerUtil.getPromiseOption(options);
+    return _load.call(this, promiseOptions).then((function(_this) {
+      return function(_groups) {
+        var group, gruops;
+        gruops = (function() {
+          var i, len, results;
+          results = [];
+          for (i = 0, len = _groups.length; i < len; i++) {
+            group = _groups[i];
+            results.push(new Group(group, this.engine));
+          }
+          return results;
+        }).call(_this);
+        return typeof options.onSuccess === "function" ? options.onSuccess(gruops) : void 0;
+      };
+    })(this))["catch"](function(err) {
+      return typeof options.onError === "function" ? options.onError(err) : void 0;
+    });
+  };
+
+
+  /*
+    创建一个群组
+  
+    @example 获取一个群组（Promise）
+      chatManager.groups.create({
+        isPublic: true,
+        userCanInvite: true,
+        inviteUserIds: ['1111']
+      }).then(function(result) {
+        // 对返回的数据做进一步处理
+      }).catch(function(err) {
+        // 处理 error
+      });
+  
+    @example 获取一个群组（回调）
+      onSuccess = function(result) {
+        // 对返回的数据做进一步处理
+      };
+  
+      onError = function(err) {
+        // 处理 error
+      };
+  
+      chatManager.groups.create({
+        isPublic: true,
+        userCanInvite: true,
+        inviteUserIds: ['1111'],
+        onSuccess: onSuccess,
+        onError: onError
+      });
+  
+    @param [Object] options 参数
+    @option options [Boolean] isPublic 群组是否公开，默认为 true
+    @option options [Boolean] userCanInvite 除创建者（owner）外，其他群用户是否可以发送加群邀请，默认为 true
+    @option options [Array<String>] inviteUserIds 被邀请加入群聊的一组用户的 ID
+    @option options [Function] onSuccess 成功后回调的函數，可选
+    @option options [Function] onError 失败后回调的函數，可选
+    @return [void, Promise] 如果 options 中含有 onSuccess 或者 onError 则无返回值，否则返回 Promise
+   */
+
+  ChatGroups.prototype.create = function(options) {
+    var promiseOptions;
+    promiseOptions = chatManagerUtil.getPromiseOption(options);
+    return this._createGroup(promiseOptions).then((function(_this) {
+      return function(group) {
+        return _this._getGroups({
+          groupId: group.groupId
+        });
+      };
+    })(this)).then((function(_this) {
+      return function(groups) {
+        var groupsObjs, ref, ref1;
+        if ((typeof grups !== "undefined" && grups !== null ? grups.length : void 0) < 0) {
+          throw new Error('create group failed');
+        }
+        if ((ref = _this.engine.options.chat) != null ? ref.enableCache : void 0) {
+          if ((ref1 = _this.engine.chatManager.dbUtil) != null) {
+            ref1.openDB().then(function(db) {
+              var ref2;
+              return (ref2 = db.groups) != null ? ref2.update(groups[0]) : void 0;
+            });
+          }
+        }
+        groupsObjs = new Group(groups[0]);
+        return typeof options.onSuccess === "function" ? options.onSuccess(groupsObjs) : void 0;
+      };
+    })(this))["catch"](function(err) {
+      return typeof options.onError === "function" ? options.onError(err) : void 0;
+    });
+  };
+
+
+  /*
+    @nodoc
+   */
+
+  ChatGroups.prototype._getGroups = function(options) {
+    return this.engine.chatManager.request('engine_chat:group:get', options);
+  };
+
+
+  /*
+    @nodoc
+   */
+
+  ChatGroups.prototype._createGroup = function(options) {
+    return this.engine.chatManager.request('engine_chat:group:create', options);
+  };
+
+  return ChatGroups;
+
+})();
+
+Promise.toPromise(ChatGroups, null, ['_loadWithCache']);
+
+module.exports = ChatGroups;
+
+
+
+},{"../../utils/promise":32,"../chatManagerUtil":10,"./chatGroup":14,"debug":38}],16:[function(require,module,exports){
+'use strict';
+var LocationHelper, Promise, debug, locationHelper;
+
+Promise = require('../../utils/promise');
+
+debug = require('debug')('engine:chat:locationHelper');
+
+
+/*
+  地理位置管理类
+
+
+  浏览器兼容
+  --------------------------------------------------
+  - **IE** (>= 9)
+  - **Chrome** (>= 31)
+  - **Firefox** (>= 38)
+  - **Safari** (>= 7.1)
+ */
+
+LocationHelper = (function() {
+  function LocationHelper() {}
+
+
+  /*
+    获取地理位置，调用该方法时，需要向浏览器请求相应的权限，推送宝会适时的向浏览器发送该请求，只有用户同意之后才能正常发送消息。
+  
+    @example 获取地理位置（promise）
+      engine.chatManager.locationHelper.getLocation().then(function(location) {
+        // 对返回的地理位置信息做进一步处理
+      }).catch(function(err) {
+        // 处理 error
+      });
+  
+    @example 获取地理位置（回调）
+      onSuccess = function(location) {
+        // 对返回的地理位置信息做进一步处理
+      };
+  
+      onError = function(err) {
+        // 处理 error
+      };
+  
+      engine.chatManager.locationHelper.getLocation({
+        onSuccess: onSuccess,
+        onError: onError
+      });
+  
+    @param [Object] options 参数
+    @option options [String] onSuccess 成功后回调的函數，可选
+    @option options [String] onError 失败后回调的函數，可选
+    @return [void, Promise] 如果 options 中含有 onSuccess 或者 onError 则无返回值，否则返回 Promise
+   */
+
+  LocationHelper.prototype.getLocation = function(options) {
+    var config, onError, onSuccess;
+    if (!(typeof navigator !== "undefined" && navigator !== null ? navigator.geolocation : void 0)) {
+      return options.onError('Geolocation is not supported by this browser.');
+    }
+    onSuccess = function(result) {
+      var position;
+      position = {
+        lat: result.coords.latitude,
+        lng: result.coords.longitude
+      };
+      return options.onSuccess(position);
+    };
+    onError = function(err) {
+      return options.onError(err);
+    };
+    config = {
+      enableHighAccuracy: true,
+      timeout: 5000,
+      maximumAge: 30000
+    };
+    return navigator.geolocation.getCurrentPosition(onSuccess, onError, config);
+  };
+
+  return LocationHelper;
+
+})();
+
+Promise.toPromise(LocationHelper, ['getLocation']);
+
+locationHelper = new LocationHelper();
+
+module.exports = locationHelper;
+
+
+
+},{"../../utils/promise":32,"debug":38}],17:[function(require,module,exports){
+'use strict';
+var Alerts, ChatManager, Conversations, DbUtil, EventEmitter, Groups, LocationHelper, Promise, Protocol, chatManagerUtil, debug, loadJS,
+  bind = function(fn, me){ return function(){ return fn.apply(me, arguments); }; },
+  extend = function(child, parent) { for (var key in parent) { if (hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
+  hasProp = {}.hasOwnProperty;
+
+debug = require('debug')('engine:chat:chatManager');
+
+Protocol = require('../protocol');
+
+Conversations = require('./conversations');
+
+Groups = require('./groups');
+
+Alerts = require('./alerts');
+
+Promise = require('../utils/promise');
+
+chatManagerUtil = require('./chatManagerUtil');
+
+DbUtil = require('./dbUtil');
+
+LocationHelper = require('./helpers/locationHelper');
+
+loadJS = require('../utils/requester/loadJS');
+
+EventEmitter = require('../utils/eventEmitter');
+
+
+/*
+  Chat 管理类，用户可以通过 engine.chatManager 获得
+
+  属性
+  --------------------------------------------------------
+  - **state** [String] - 当前用户及登录状态，枚举值： initialized, loggingIn, loggedIn, failed, loggedOut
+  - **conversations**  ([ChatConversations](./ChatConversations.html)) - 会话管理对象
+  - **groups**  ([ChatGroups](./ChatGroups.html)) - 群组管理对象
+  - **alerts** ([Alerts](./ChatAlerts.html)) - 事件管理对象
+  - **locationHelper** ([LocationHelper](./LocationHelper.html)) - 地理位置管理对象
+
+  事件
+  -------------------------------
+  - **message:new** 用来监听新消息，处理函数的参数如下：
+      - **message** (Object) ： 获得的新消息，该消息结构如下：
+
+          ```js
+          {
+            "messageId": 300,
+            // singleChat（单聊）或 groupChat （群聊）
+            "type": "singleChat",
+            // 来自谁，userId
+            "from": "1111",
+            // 发给谁，userId 或 groupId
+            "to": "1112",
+            "content": {
+              // 消息类型，type 枚举： text, image, voice, video, location, event
+              "type": "text",
+              // 消息内容，目前支持的消息内容有： text（文本消息），file（多媒体消息），event（事件消息），location（地理位置消息）
+              "text": "Hello World!",
+              // 可选，附加信息，用于实现应用自定义业务逻辑
+              "extra": {}
+            },
+            "createdAt": "2015-01-25T07:47:09.678Z"
+          }
+          ```
+
+  - **user:presenceChanged** 用户在线状态发生变化，处理函数的参数如下：
+      - **presence** (Object) ： 状态和用户信息，该对象结构如下：
+
+          ```js
+          {
+              "userId": "1111",
+              // 变为哪个状态，online 或 offline
+              "changedTo": "online"
+          }
+          ```
+ */
+
+ChatManager = (function(superClass) {
+  extend(ChatManager, superClass);
+
+
+  /*
+    @nodoc
+    构造函数.
+    @param [Engine] @engine Engine 的实例
+   */
+
+  function ChatManager(engine) {
+    var ref;
+    this.engine = engine;
+    this.request = bind(this.request, this);
+    this._handleOptions = bind(this._handleOptions, this);
+    this._handleOptions();
     this._loginOptions = null;
     this.user = null;
     this.state = 'initialized';
+    this.noConnectionOperations = [];
+    this.conversations = new Conversations(this.engine);
+    this.groups = new Groups(this.engine);
+    this.alerts = new Alerts(this.engine);
+    this.locationHelper = LocationHelper;
+    this.supportOffline = ((ref = this.engine.options) != null ? ref.supportOffline : void 0) || false;
   }
 
-  ChatManager.prototype._separateOptionsAndHandlers = function(originalOptions) {
-    var handlers, k, options, v;
-    options = {};
-    handlers = {};
-    for (k in originalOptions) {
-      v = originalOptions[k];
-      if (typeof v === 'function') {
-        handlers[k] = v;
-      } else {
-        options[k] = v;
+
+  /*
+   @nodoc
+   */
+
+  ChatManager.prototype._handleOptions = function() {
+    var k, promiseBlock, ref, ref1, v;
+    debug('handle options', this.engine.options);
+    if (!((ref = this.engine.options) != null ? ref.chat : void 0)) {
+      return;
+    }
+    promiseBlock = [];
+    if (!(this.engine.options.chat && (typeof window !== "undefined" && window !== null))) {
+      return;
+    }
+    ref1 = this.engine.options.chat;
+    for (k in ref1) {
+      v = ref1[k];
+      if (this.engine.options.chat[k]) {
+        promiseBlock.push(loadJS.require(k, this.engine.options.basePath));
       }
     }
-    return [options, handlers];
+    return Promise.all(promiseBlock).then(function(result) {
+      debug('load extension over', result);
+      return result;
+    });
   };
 
-  ChatManager.prototype._request = function(eventName, options, needSendAck) {
-    var callback, handlers, _ref;
-    _ref = this._separateOptionsAndHandlers(options), options = _ref[0], handlers = _ref[1];
-    if (this.state !== 'loggedIn') {
-      return typeof handlers.onError === "function" ? handlers.onError(Protocol.responseErrors.unauthorized) : void 0;
-    }
-    callback = function(err, result) {
-      if (err) {
-        return typeof handlers.onError === "function" ? handlers.onError(err) : void 0;
-      } else {
-        return typeof handlers.onSuccess === "function" ? handlers.onSuccess(result) : void 0;
-      }
-    };
-    if (needSendAck) {
-      callback.needSendAck = true;
-    }
-    return this.engine.connection.sendEvent(eventName, options, callback);
-  };
+
+  /*
+    用户登录的方法，调用该方法后，engine 可以监听一系列的 chat 相关的事件，并实时的推送消息给用户
+  
+    @example 登录
+      var onLoginSucceeded = function() {
+        console.log('login succeeded');
+      };
+  
+      var onLoginError = function(err) {
+        console.log('login failed：', err);
+      };
+  
+      var chatUserId = 'chatUserId';
+      engine.chatManager.login({
+        authData: chatUserId
+      });
+  
+      engine.chatManager.bind('login:succeeded：', onLoginSucceeded);
+      engine.chatManager.bind('login:failed：', onLoginError);
+  
+    @param [object] options 登录参数
+    @option options [String] authData chatUserId
+   */
 
   ChatManager.prototype.login = function(options) {
-    var handlers, _ref, _ref1;
+    var ref;
     if (options == null) {
       options = {};
     }
@@ -469,42 +2880,62 @@ ChatManager = (function() {
     if (this.engine.connection.state !== 'connected') {
       return;
     }
-    _ref = this._separateOptionsAndHandlers(options), options = _ref[0], handlers = _ref[1];
     if (!options.authData) {
-      options.authData = (_ref1 = this.engine.options) != null ? _ref1.authData : void 0;
+      options.authData = (ref = this.engine.options) != null ? ref.authData : void 0;
     }
     return this.engine.authorizer.authorize(options, {
       chatLogin: true
     }, (function(_this) {
       return function(err, authResult) {
+        var preUser;
         if (err) {
           _this.state = 'failed';
-          return typeof handlers.onError === "function" ? handlers.onError(err) : void 0;
+          return _this.trigger('login:failed', err);
         }
+        preUser = _this.user;
         try {
           _this.user = JSON.parse(authResult.userData);
-        } catch (_error) {}
+        } catch (undefined) {}
         return _this.engine.connection.sendEvent('engine_chat:user:login', authResult, function(err, result) {
-          var k, v;
+          var k, ref1, ref2, v;
           if (err) {
             if (err.code === Protocol.responseErrors.noConnection) {
               return;
             }
             debug('login error', err);
             _this.state = 'failed';
-            return typeof handlers.onError === "function" ? handlers.onError(err) : void 0;
+            return _this.trigger('login:failed', err);
           }
           for (k in result) {
             v = result[k];
             _this.user[k] = v;
           }
           _this.state = 'loggedIn';
-          debug('login succeeded', result);
-          return typeof handlers.onSuccess === "function" ? handlers.onSuccess(result) : void 0;
+          if ((preUser != null ? preUser.userId : void 0) === ((ref1 = _this.user) != null ? ref1.userId : void 0)) {
+            _this.handleNoConnectionOperations();
+          } else if (preUser != null) {
+            _this.handleNoConnectionOperations(true);
+          }
+          if ((ref2 = _this.engine.options.chat) != null ? ref2.enableCache : void 0) {
+            if (_this.dbUtil == null) {
+              _this.dbUtil = new DbUtil(_this.engine);
+            }
+            _this.dbUtil.initLocalDB().then(function() {
+              return _this.trigger('login:succeeded', result);
+            });
+          } else {
+            _this.trigger('login:succeeded');
+          }
+          return debug('login succeeded', result);
         });
       };
     })(this));
   };
+
+
+  /*
+   @nodoc
+   */
 
   ChatManager.prototype.autoLogin = function() {
     if (this._loginOptions) {
@@ -512,84 +2943,1576 @@ ChatManager = (function() {
     }
   };
 
+
+  /*
+    用户退出的方法，调用该方法后会解除监听
+  
+    @example 注销用户
+      engine.chatManager.logout().then(function(result) {
+        console.log(result);
+      }).catch(function(err) {
+        console.log(err);
+      });
+   */
+
   ChatManager.prototype.logout = function(options) {
-    var handlers, _ref;
+    var callback, handlers, ref;
     this._loginOptions = null;
-    _ref = this._separateOptionsAndHandlers(options), options = _ref[0], handlers = _ref[1];
-    return this.engine.connection.sendEvent('engine_chat:user:logout', (function(_this) {
+    ref = chatManagerUtil._separateOptionsAndHandlers(options), options = ref[0], handlers = ref[1];
+    return callback = this.engine.connection.sendEvent('engine_chat:user:logout', (function(_this) {
       return function(err) {
         if (err) {
-          if (err.code === Protocol.responseErrors.noConnection) {
-            return _this.state = 'loggedOut';
+          if (err.code === Protocol.responseErrors.noConnection.code) {
+            _this.bufferNoConnectionOperations('engine_chat:user:logout', null, callback);
+            _this.state = 'loggedOut';
+            return typeof handlers.onSuccess === "function" ? handlers.onSuccess() : void 0;
+          } else {
+            debug('logout error', err);
+            return typeof handlers.onError === "function" ? handlers.onError(err) : void 0;
           }
-          debug('logout error', err);
-          return typeof handlers.onError === "function" ? handlers.onError(err) : void 0;
+        } else {
+          _this.handleNoConnectionOperations(true);
+          _this.state = 'loggedOut';
+          _this.conversations.initConversationBuffer();
+          _this.user = null;
+          debug('logout succeeded');
+          return typeof handlers.onSuccess === "function" ? handlers.onSuccess() : void 0;
         }
-        _this.state = 'loggedOut';
-        _this.user = null;
-        debug('logout succeeded');
-        return typeof handlers.onSuccess === "function" ? handlers.onSuccess() : void 0;
       };
     })(this));
   };
 
+
+  /*
+   @nodoc
+   */
+
   ChatManager.prototype.handleEvent = function(event) {
-    var _base, _base1;
-    if (!this._loginOptions) {
+    var eventName;
+    eventName = event.name.replace('engine_chat:', '');
+    event.name = eventName;
+    event.data = this.formatEventData(event);
+    this.trigger(eventName, event.data);
+    switch (event.name) {
+      case 'message:new':
+        this.conversations.handleEvent(event);
+        return this.engine.connection.sendResponseEvent(event.id);
+      case 'alert:new':
+        return this.engine.connection.sendResponseEvent(event.id);
+    }
+  };
+
+
+  /*
+    @nodoc
+   */
+
+  ChatManager.prototype.formatEventData = function(event) {
+    if (event.name === 'alert:new') {
+      return this.alerts.formatEventData(event.data);
+    } else {
+      return event.data;
+    }
+  };
+
+
+  /*
+    @nodoc
+   */
+
+  ChatManager.prototype.bufferNoConnectionOperations = function(name, data, callback) {
+    var noConnectionOperation, ref;
+    if (callback && ((ref = this.user) != null ? ref.userId : void 0)) {
+      if (this.noConnectionOperations == null) {
+        this.noConnectionOperations = [];
+      }
+      noConnectionOperation = {
+        name: name,
+        data: data,
+        callback: callback
+      };
+      debug('buffer no connection operations', noConnectionOperation);
+      if (name !== 'engine_chat:message:send') {
+        noConnectionOperation.timer = setTimeout(function() {
+          var err;
+          err = Protocol.responseErrors.requestTimeout;
+          err.isFailed = true;
+          callback(err);
+          return noConnectionOperation.isTimeout = true;
+        }, 60 * 1000);
+      }
+      return this.noConnectionOperations.push(noConnectionOperation);
+    }
+  };
+
+
+  /*
+    @nodoc
+   */
+
+  ChatManager.prototype.handleNoConnectionOperations = function(isFailed) {
+    var err, operation, ref;
+    if (((ref = this.noConnectionOperations) != null ? ref.length : void 0) < 1 && this.handlingNoConnectionOperations && !isFailed) {
       return;
     }
-    switch (event.name) {
-      case 'engine_chat:message:new':
-        if (typeof (_base = this._loginOptions).onNewMessage === "function") {
-          _base.onNewMessage(event.data);
-        }
-        return this.engine.connection.sendResponseEvent(event.id);
-      case 'engine_chat:user:presenceChanged':
-        return typeof (_base1 = this._loginOptions).onUserPresenceChanged === "function" ? _base1.onUserPresenceChanged(event.data) : void 0;
+    this.handlingNoConnectionOperations = true;
+    while ((operation = this.noConnectionOperations.shift())) {
+      if (operation.isTimeout) {
+        continue;
+      }
+      if (operation.timer != null) {
+        clearTimeout(operation.timer);
+      }
+      if (isFailed) {
+        err = Protocol.responseErrors.noConnection;
+        err.isFailed = true;
+        operation.callback(err);
+      } else {
+        this.engine.connection.sendEvent(operation.name, operation.data, operation.callback);
+      }
     }
+    return this.handlingNoConnectionOperations = false;
+  };
+
+
+  /*
+    开启本地缓存时，调用该方法可以清除本地缓存
+  
+    @example 清除本地缓存
+      engine.chatManager.clearCache()
+   */
+
+  ChatManager.prototype.clearCache = function() {
+    var ref, ref1;
+    if ((ref = this.engine.options.chat) != null ? ref.enableCache : void 0) {
+      return (ref1 = this.dbUtil) != null ? ref1.clearCache() : void 0;
+    }
+  };
+
+
+  /*
+    @nodoc
+   */
+
+  ChatManager.prototype.request = function(eventName, options, needSendAck) {
+    var callback, handlers, ref;
+    ref = chatManagerUtil._separateOptionsAndHandlers(options), options = ref[0], handlers = ref[1];
+    if (this.state !== 'loggedIn') {
+      return typeof handlers.onError === "function" ? handlers.onError(Protocol.responseErrors.unauthorized) : void 0;
+    }
+    callback = (function(_this) {
+      return function(err, result) {
+        var ref1;
+        if (err) {
+          if (err.code === Protocol.responseErrors.noConnection.code && !err.isFailed && _this.supportOffline) {
+            if ((eventName.indexOf('get')) !== -1 && ((ref1 = _this.engine.options.chat) != null ? ref1.enableCache : void 0)) {
+              return handlers.onSuccess([]);
+            }
+            return _this.bufferNoConnectionOperations(eventName, options, callback);
+          } else {
+            return typeof handlers.onError === "function" ? handlers.onError(err) : void 0;
+          }
+        } else {
+          return typeof handlers.onSuccess === "function" ? handlers.onSuccess(result) : void 0;
+        }
+      };
+    })(this);
+    if (needSendAck) {
+      callback.needSendAck = true;
+    }
+    return this.engine.connection.sendEvent(eventName, options, callback);
+  };
+
+
+  /*
+    @nodoc
+    Only support chrome
+    There is currently no way of enumerating the existing databases in the standard
+    So it can not use indexedDB.deleteDatabase(dbname) delete all database
+    see http://stackoverflow.com/questions/15234363/indexeddb-view-all-databases-and-object-stores
+   */
+
+  ChatManager.prototype.clearAllCache = function() {
+    debug('clean all cache');
+    return typeof indexedDB !== "undefined" && indexedDB !== null ? typeof indexedDB.webkitGetDatabaseNames === "function" ? indexedDB.webkitGetDatabaseNames().onsuccess = function(sender, args) {
+      var i, len, name, ref, results;
+      ref = sender.target.result;
+      results = [];
+      for (i = 0, len = ref.length; i < len; i++) {
+        name = ref[i];
+        debug('clean cache', name);
+        if (name.indexOf('chatManagerDB' > 0)) {
+          results.push(typeof indexedDB !== "undefined" && indexedDB !== null ? indexedDB.deleteDatabase(name) : void 0);
+        } else {
+          results.push(void 0);
+        }
+      }
+      return results;
+    } : void 0 : void 0;
   };
 
   return ChatManager;
 
-})();
+})(EventEmitter);
 
-trivialRequestResponseAPIEventMapping = {
-  getGroups: 'engine_chat:group:get',
-  getGroupUsers: 'engine_chat:group:getUsers',
-  createGroup: 'engine_chat:group:create',
-  inviteUsersIntoGroup: 'engine_chat:group:joinInvitation:send',
-  removeGroupUsers: 'engine_chat:group:removeUsers',
-  leaveGroup: 'engine_chat:group:leave',
-  getConversations: 'engine_chat:conversation:get',
-  resetConversationUnread: 'engine_chat:conversation:resetUnread',
-  deleteConversation: 'engine_chat:conversation:delete',
-  sendMessage: 'engine_chat:message:send',
-  getMessages: {
-    name: 'engine_chat:message:get',
-    needSendAck: true
-  }
-};
-
-_fn = function(event) {
-  return ChatManager.prototype[api] = function(options) {
-    return this._request(event.name || event, options, event.needSendAck);
-  };
-};
-for (api in trivialRequestResponseAPIEventMapping) {
-  event = trivialRequestResponseAPIEventMapping[api];
-  _fn(event);
-}
+Promise.toPromise(ChatManager, ['logout']);
 
 module.exports = ChatManager;
 
 
 
-},{"./protocol":12,"debug":19}],8:[function(require,module,exports){
+},{"../protocol":29,"../utils/eventEmitter":30,"../utils/promise":32,"../utils/requester/loadJS":35,"./alerts":9,"./chatManagerUtil":10,"./conversations":12,"./dbUtil":13,"./groups":15,"./helpers/locationHelper":16,"debug":38}],18:[function(require,module,exports){
+'use strict';
+var ChatMessages, Promise, TmpChatMessage, chatManagerUtil, debug;
+
+debug = require('debug')('engine:chat:messages');
+
+chatManagerUtil = require('../chatManagerUtil');
+
+Promise = require('../../utils/promise');
+
+TmpChatMessage = require('./tmpMessage');
+
+
+/*
+  @nodoc
+ */
+
+ChatMessages = (function() {
+  function ChatMessages(engine) {
+    this.engine = engine;
+    void 0;
+  }
+
+  ChatMessages.prototype._loadNewestMessages = function(options) {
+    var limit, ref, scope;
+    debug('load newest messages', options);
+    limit = options.limit || 20;
+    scope = {};
+    return (ref = this.engine.chatManager.dbUtil) != null ? ref.openDB().then((function(_this) {
+      return function(server) {
+        scope.db = server;
+        return scope.db.messages.query('messageId').filter(_this.engine.chatManager.dbUtil.match({
+          target: options.target,
+          type: options.type
+        })).desc().execute();
+      };
+    })(this)).then((function(_this) {
+      return function(messagesResult) {
+        var endMessageId, ref1;
+        if (messagesResult == null) {
+          messagesResult = [];
+        }
+        debug('get last local message', messagesResult[0]);
+        endMessageId = ((ref1 = messagesResult[0]) != null ? ref1.messageId : void 0) + 1 || 0;
+        scope.messagesResult = messagesResult;
+        return _this._getMessages({
+          type: options.type,
+          target: options.target,
+          endMessageId: endMessageId
+        });
+      };
+    })(this)).then((function(_this) {
+      return function(newMessages) {
+        var j, len, message, messagesResult, promises;
+        debug('get newest messages', newMessages);
+        for (j = 0, len = newMessages.length; j < len; j++) {
+          message = newMessages[j];
+          message.isNew = true;
+        }
+        messagesResult = newMessages.concat(scope.messagesResult);
+        promises = _this._loadMissingMessageBlocksPromises(messagesResult, options);
+        return Promise.all(promises).then(function(missingMessageBlocks) {
+          var k, l, len1, len2, missingMessages;
+          debug('missing messages blocks:', missingMessageBlocks);
+          for (k = 0, len1 = missingMessageBlocks.length; k < len1; k++) {
+            missingMessages = missingMessageBlocks[k];
+            if (missingMessages != null) {
+              for (l = 0, len2 = missingMessages.length; l < len2; l++) {
+                message = missingMessages[l];
+                message.isNew = true;
+                messagesResult.push(message);
+              }
+            }
+          }
+          return messagesResult.slice(0, +limit + 1 || 9e9);
+        });
+      };
+    })(this)) : void 0;
+  };
+
+  ChatMessages.prototype._loadMissingMessageBlocksPromises = function(messagesResult, options) {
+    var i, promises;
+    promises = [];
+    if (messagesResult.length === 0) {
+      promises.push(this._getMessages({
+        type: options.type,
+        target: options.target,
+        startMessageId: options.startMessageId,
+        endMessageId: options.endMessageId,
+        limit: options.limit || 20
+      }));
+      return promises;
+    }
+    if (options.startMessageId > messagesResult[0].messageId) {
+      promises.push(this._getMessages({
+        type: options.type,
+        target: options.target,
+        startMessageId: options.startMessageId,
+        endMessageId: messagesResult[0].messageId + 1,
+        limit: options.startMessageId - messagesResult[0].messageId
+      }));
+    }
+    if (options.endMessageId < messagesResult[messagesResult.length - 1].messageId) {
+      promises.push(this._getMessages({
+        type: options.type,
+        target: options.target,
+        startMessageId: messagesResult[messagesResult.length - 1].messageId - 1,
+        endMessageId: options.endMessageId,
+        limit: messagesResult[messagesResult.length - 1].messageId - options.endMessageId
+      }));
+    }
+    i = 0;
+    while (i < messagesResult.length - 1) {
+      (function(_this) {
+        return (function(messagesResult) {
+          if (messagesResult[i].messageId - messagesResult[i + 1].messageId !== 1) {
+            return promises.push(_this._getMessages({
+              type: options.type,
+              target: options.target,
+              startMessageId: messagesResult[i].messageId - 1,
+              endMessageId: messagesResult[i + 1].messageId + 1,
+              limit: messagesResult[i].messageId - messagesResult[i + 1].messageId
+            }));
+          }
+        });
+      })(this)(messagesResult);
+      i++;
+    }
+    return promises;
+  };
+
+  ChatMessages.prototype._save = function(messages, target) {
+    var ref;
+    if (!(messages instanceof Array)) {
+      messages.isNew = true;
+      messages = [messages];
+    }
+    return (ref = this.engine.chatManager.dbUtil) != null ? ref.openDB().then(function(db) {
+      var j, len, message, updateMessagePromises;
+      updateMessagePromises = [];
+      for (j = 0, len = messages.length; j < len; j++) {
+        message = messages[j];
+        if (!message.isNew) {
+          continue;
+        }
+        message.target = target;
+        message.id = message.from + message.to + message.messageId;
+        updateMessagePromises.push(db.messages.update(message));
+      }
+      return Promise.all(updateMessagePromises);
+    }) : void 0;
+  };
+
+  ChatMessages.prototype._loadWithCache = function(options) {
+    var limit, ref;
+    if (!((options.startMessageId != null) && (options.endMessageId != null))) {
+      return this._loadNewestMessages(options);
+    }
+    limit = options.limit || 20;
+    if (!options.startMessageId) {
+      options.startMessageId = options.endMessageId + limit;
+    }
+    if (!options.endMessageId) {
+      options.endMessageId = options.startMessageId - limit;
+    }
+    debug('load with cache', options);
+    return (ref = this.engine.chatManager.dbUtil) != null ? ref.openDB().then((function(_this) {
+      return function(db) {
+        return db.messages.query('messageId').bound(options.endMessageId, options.startMessageId).filter(_this.engine.chatManager.dbUtil.match({
+          target: options.target,
+          type: options.type
+        })).desc().execute();
+      };
+    })(this)).then((function(_this) {
+      return function(messagesResult) {
+        var promises;
+        debug('local load', messagesResult);
+        limit = options.startMessageId - options.endMessageId + 1;
+        if (messagesResult.length === limit) {
+          return Promise.resolve(messagesResult);
+        } else {
+          promises = _this._loadMissingMessageBlocksPromises(messagesResult, options);
+          return Promise.all(promises).then(function(missingMessageBlocks) {
+            var j, k, len, len1, message, missingMessages;
+            debug('missing messages blocks:', missingMessageBlocks);
+            for (j = 0, len = missingMessageBlocks.length; j < len; j++) {
+              missingMessages = missingMessageBlocks[j];
+              if (missingMessages != null) {
+                for (k = 0, len1 = missingMessages.length; k < len1; k++) {
+                  message = missingMessages[k];
+                  message.isNew = true;
+                  messagesResult.push(message);
+                }
+              }
+            }
+            return messagesResult;
+          });
+        }
+      };
+    })(this)) : void 0;
+  };
+
+  ChatMessages.prototype.load = function(options) {
+    var _load, limit, promiseOptions, ref;
+    if ((ref = this.engine.options.chat) != null ? ref.enableCache : void 0) {
+      _load = this._loadWithCache;
+    } else {
+      _load = this._getMessages;
+    }
+    promiseOptions = chatManagerUtil.getPromiseOption(options);
+    if (promiseOptions.to == null) {
+      promiseOptions.to = promiseOptions.target;
+    }
+    limit = options.limit || 20;
+    return _load.call(this, promiseOptions).then((function(_this) {
+      return function(messages) {
+        var ref1;
+        if ((ref1 = _this.engine.options.chat) != null ? ref1.enableCache : void 0) {
+          return _this._save(messages, promiseOptions.target).then(function() {
+            var ref2;
+            return (ref2 = _this.engine.chatManager.dbUtil) != null ? ref2.openDB() : void 0;
+          }).then(function(db) {
+            if (_this.engine.options.supportOffline) {
+              return db.tmpMessages.query('messageId').filter(_this.engine.chatManager.dbUtil.match({
+                target: options.target,
+                type: options.type
+              })).desc().execute();
+            } else {
+              return Promise.resolve([]);
+            }
+          }).then(function(msgs) {
+            var j, k, len, len1, message, msg, tmpMessage;
+            debug('tmp messages', msgs);
+            for (j = 0, len = msgs.length; j < len; j++) {
+              msg = msgs[j];
+              tmpMessage = new TmpChatMessage(_this.engine, msg);
+              if (tmpMessage.state === 'sending') {
+                tmpMessage.retrySendMessage();
+              }
+              messages.push(tmpMessage);
+            }
+            messages.sort(function(message1, message2) {
+              var n;
+              n = message2.messageId - message1.messageId;
+              if (n === 0) {
+                return (message2 != null ? message2.id : void 0) - (message1 != null ? message1.id : void 0);
+              } else {
+                return n;
+              }
+            });
+            for (k = 0, len1 = messages.length; k < len1; k++) {
+              message = messages[k];
+              if (message.state == null) {
+                message.state = 'succeed';
+              }
+            }
+            return typeof options.onSuccess === "function" ? options.onSuccess(messages.slice(0, +limit + 1 || 9e9)) : void 0;
+          });
+        } else {
+          return typeof options.onSuccess === "function" ? options.onSuccess(messages.slice(0, +limit + 1 || 9e9)) : void 0;
+        }
+      };
+    })(this))["catch"](function(err) {
+      return typeof options.onError === "function" ? options.onError(err) : void 0;
+    });
+  };
+
+  ChatMessages.prototype.send = function(options) {
+    var message, promise, promiseOptions, ref, tmpMessage;
+    promiseOptions = chatManagerUtil.getPromiseOption(options);
+    message = promiseOptions;
+    message.from = this.engine.chatManager.user.userId;
+    promise = void 0;
+    if (((ref = this.engine.options.chat) != null ? ref.enableCache : void 0) && this.engine.options.supportOffline) {
+      tmpMessage = new TmpChatMessage(this.engine, message);
+      promise = tmpMessage.save().then((function(_this) {
+        return function() {
+          return _this._sendMessage(promiseOptions);
+        };
+      })(this));
+    } else {
+      promise = this._sendMessage(promiseOptions);
+    }
+    return promise.then((function(_this) {
+      return function(sentMessage) {
+        var ref1, ref2;
+        message.messageId = sentMessage.messageId;
+        message.id = message.from + message.to + sentMessage.messageId;
+        if (sentMessage.content != null) {
+          message.content = sentMessage.content;
+        } else {
+          message.content = options.content;
+        }
+        if ((ref1 = _this.engine.options.chat) != null ? ref1.enableCache : void 0) {
+          return (ref2 = _this.engine.chatManager.dbUtil) != null ? ref2.openDB().then(function(db) {
+            if (_this.engine.options.supportOffline) {
+              return tmpMessage.remove().then(function() {
+                debug('removed tmpMessage', tmpMessage.id);
+                message.target = options.to;
+                db.messages.update(message);
+                return typeof options.onSuccess === "function" ? options.onSuccess(message) : void 0;
+              });
+            } else {
+              message.target = options.to;
+              db.messages.update(message);
+              return typeof options.onSuccess === "function" ? options.onSuccess(message) : void 0;
+            }
+          }) : void 0;
+        } else {
+          return typeof options.onSuccess === "function" ? options.onSuccess(message) : void 0;
+        }
+      };
+    })(this))["catch"]((function(_this) {
+      return function(err) {
+        var ref1, ref2;
+        if (((ref1 = _this.engine.options.chat) != null ? ref1.enableCache : void 0) && _this.engine.options.supportOffline) {
+          tmpMessage.changState('failed');
+          return (ref2 = _this.engine.chatManager.dbUtil) != null ? ref2.openDB().then(function(db) {
+            return db.tmpMessages.update(tmpMessage.toJSON());
+          }).then(function() {
+            return options != null ? typeof options.onError === "function" ? options.onError(err) : void 0 : void 0;
+          }) : void 0;
+        } else {
+          return options != null ? typeof options.onError === "function" ? options.onError(err) : void 0 : void 0;
+        }
+      };
+    })(this));
+  };
+
+  ChatMessages.prototype._sendMessage = function(options) {
+    return this.engine.chatManager.request('engine_chat:message:send', options);
+  };
+
+  ChatMessages.prototype._getMessages = function(options) {
+    return this.engine.chatManager.request('engine_chat:message:get', options, true);
+  };
+
+  return ChatMessages;
+
+})();
+
+Promise.toPromise(ChatMessages, ['send', 'load', '_getMessages', '_sendMessage']);
+
+module.exports = ChatMessages;
+
+
+
+},{"../../utils/promise":32,"../chatManagerUtil":10,"./tmpMessage":19,"debug":38}],19:[function(require,module,exports){
+'use strict';
+var EventEmitter, TmpChatMessage,
+  bind = function(fn, me){ return function(){ return fn.apply(me, arguments); }; },
+  extend = function(child, parent) { for (var key in parent) { if (hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
+  hasProp = {}.hasOwnProperty;
+
+EventEmitter = require('../../utils/eventEmitter');
+
+
+/*
+  @nodoc
+ */
+
+TmpChatMessage = (function(superClass) {
+  extend(TmpChatMessage, superClass);
+
+  function TmpChatMessage(engine, options) {
+    this.engine = engine;
+    if (options == null) {
+      options = {};
+    }
+    this.changState = bind(this.changState, this);
+    this.messageId = options.messageId, this.createdAt = options.createdAt, this.from = options.from, this.to = options.to, this.type = options.type, this.content = options.content, this.state = options.state, this.target = options.target, this.id = options.id;
+    if (this.state == null) {
+      this.state = 'sending';
+    }
+    if (this.target == null) {
+      this.target = this.to;
+    }
+  }
+
+  TmpChatMessage.prototype.save = function() {
+    var ref;
+    return (ref = this.engine.chatManager.dbUtil) != null ? ref.openDB().then((function(_this) {
+      return function(db) {
+        if (_this.messageId != null) {
+          return db.tmpMessages.add(_this.toJSON());
+        } else {
+          return db.messages.query('messageId').filter(_this.engine.chatManager.dbUtil.match({
+            target: _this.target,
+            type: _this.type
+          })).desc().execute().then(function(messagesResult) {
+            var ref1;
+            if (messagesResult == null) {
+              messagesResult = [];
+            }
+            _this.messageId = ((ref1 = messagesResult[0]) != null ? ref1.messageId : void 0) || 0;
+            return db.tmpMessages.add(_this.toJSON());
+          });
+        }
+      };
+    })(this)).then((function(_this) {
+      return function(tmpMessage) {
+        _this.id = tmpMessage[0].id;
+        return _this.toJSON();
+      };
+    })(this)) : void 0;
+  };
+
+  TmpChatMessage.prototype.changState = function(state) {
+    var previous, ref, stateInfo;
+    if ('string' !== typeof state) {
+      return;
+    }
+    ref = [this.state, state], previous = ref[0], this.state = ref[1];
+    stateInfo = {
+      previous: previous,
+      current: this.state
+    };
+    return this.trigger('state:changed', stateInfo);
+  };
+
+  TmpChatMessage.prototype.toJSON = function() {
+    var that;
+    that = {
+      messageId: this.messageId,
+      createdAt: this.createdAt,
+      from: this.from,
+      to: this.to,
+      type: this.type,
+      state: this.state,
+      content: this.content,
+      target: this.target
+    };
+    if (this.id) {
+      that.id = this.id;
+    }
+    return that;
+  };
+
+  TmpChatMessage.prototype.remove = function() {
+    var ref;
+    if (!this.id) {
+      return;
+    }
+    return (ref = this.engine.chatManager.dbUtil) != null ? ref.openDB().then((function(_this) {
+      return function(db) {
+        return db.tmpMessages.remove(_this.id);
+      };
+    })(this)) : void 0;
+  };
+
+  TmpChatMessage.prototype.retrySendMessage = function() {
+    if (this.state === 'succeeded') {
+      return;
+    }
+    return this.remove().then((function(_this) {
+      return function() {
+        var Messages, messages;
+        Messages = require('../messages');
+        messages = new Messages(_this.engine);
+        return messages.send({
+          target: _this.to,
+          type: _this.type,
+          content: _this.content,
+          from: _this.from,
+          to: _this.to
+        });
+      };
+    })(this)).then((function(_this) {
+      return function(message) {
+        _this.messageId = message.messageId;
+        _this.changState('succeeded');
+        return _this.toJSON();
+      };
+    })(this))["catch"]((function(_this) {
+      return function() {
+        return _this.changState('failed');
+      };
+    })(this));
+  };
+
+  return TmpChatMessage;
+
+})(EventEmitter);
+
+module.exports = TmpChatMessage;
+
+
+
+},{"../../utils/eventEmitter":30,"../messages":18}],20:[function(require,module,exports){
+'use strict';
+var ChatImageUploader, ChatUploader, debug,
+  extend = function(child, parent) { for (var key in parent) { if (hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
+  hasProp = {}.hasOwnProperty;
+
+debug = require('debug')('engine:chat:ChatImageUploader');
+
+ChatUploader = require('./uploader');
+
+
+/*
+  用于实现图片上传
+ */
+
+ChatImageUploader = (function(superClass) {
+  extend(ChatImageUploader, superClass);
+
+  function ChatImageUploader(engine) {
+    this.engine = engine;
+    ChatImageUploader.__super__.constructor.call(this, this.engine);
+  }
+
+
+  /*
+    @nodoc
+    初始化图片上传
+   */
+
+  ChatImageUploader.prototype.init = function(options) {
+    options.messageType = 'image';
+    return ChatImageUploader.__super__.init.call(this, options);
+  };
+
+  return ChatImageUploader;
+
+})(ChatUploader);
+
+module.exports = ChatImageUploader;
+
+
+
+},{"./uploader":21,"debug":38}],21:[function(require,module,exports){
+'use strict';
+var ChatUploader, EventEmitter, Messages, Promise, debug, loadJS,
+  bind = function(fn, me){ return function(){ return fn.apply(me, arguments); }; },
+  extend = function(child, parent) { for (var key in parent) { if (hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
+  hasProp = {}.hasOwnProperty;
+
+debug = require('debug')('engine:chat:ChatUploader');
+
+EventEmitter = require('../../utils/eventEmitter');
+
+Messages = require('../messages');
+
+loadJS = require('../../utils/requester/loadJS');
+
+Promise = require('../../utils/promise');
+
+
+/*
+  用于实现上传
+
+  属性
+  --------------------------------------------------------
+  - **state**  (String) - 状态，枚举值如下：
+      - `initialized` ： 初始化完成
+      - `uploading` ： 正在上传
+      - `uploaded` ： 上传成功
+      - `failed` ： 初始化失败
+
+  事件
+  -------------------------------
+  - **upload:done** 某个文件上传完毕，处理函数的参数如下：
+      - **file** (Object)： 上传后七牛返回的文件信息，该对象结构如下：
+
+          ```js
+          {
+            "id": "o_19rkanrppgc1t2hua01vvdbcvg",
+            "lastModifiedDate": "8/1/2015, 5:50:58 PM",
+            "loaded": 30764,
+            "name": "audio_19rkanrpb9391bbl1llo1gm71782e",
+            "origSize": 30764,
+            "percent": 100,
+            "size": 30764,
+            "status": 5,
+            "type": "audio/wav"
+          }
+          ```
+
+      - **info** (String) ： 七牛返回的文件信息
+  - **upload:error** 某个文件上传失败，处理函数的参数如下：
+      - **error** (Object) ： error 信息
+  - **message:sending** 上传完毕后开始发送信息，处理函数的参数如下：
+      - **message** (Object) ： 上传成功后的消息，该对象结构如下：
+
+          ```js
+          {
+            "content": {
+              "type": "image",
+              "file": {
+                "key": "key",
+                "name": "fname",
+                "size": "fsize",
+                "etag": "etag",
+                "mimeType": "mimeType",
+                // 宽，仅限于图片、视频消息
+                "width": 1200,
+                // 高，仅限于图片、视频消息
+                "height": 960,
+                // 时长，仅限于语音、视频消息
+                "duration": 1.2
+              }
+            },
+            "type": "groupChat",
+            "to": "target",
+            "from": "111111"
+          }
+          ```
+
+  - **message:sent** 上传完毕后消息发送成功，处理函数的参数如下：
+      - **message** (Object) ： 成功发送的消息，该对象结构如下：
+
+          ```js
+          {
+            "content": {
+              "url": "download url"
+              "etag": "FrXCQeUTuAzn89hOXGN3fNMVM_6d",
+              "mimeType": "image/jpeg",
+              "name": "3088587_165616966601_2.jpg",
+              "size": "126400",
+              // 宽，仅限于图片、视频消息
+              "width": 1200,
+              // 高，仅限于图片、视频消息
+              "height": 960,
+              // 时长，仅限于语音、视频消息
+              "duration": 1.2,
+              // 缩略图 url，图片宽度小于等于 100px
+              "thumbUrl": "
+            },
+            "createdAt": "2015-08-01T09:54:59.647Z",
+            "from": "1111",
+            "fromMe": true,
+            "id": "asd55bae0e70e08198162ccd96e32",
+            "messageId": 32,
+            "state": "sent",
+            "to": "55bae0e70e08198162ccd96e",
+            "type": "groupChat"
+          }
+          ```
+
+  - **message:sendFailed** 上传完毕后消息发送失败，处理函数的参数如下：
+      - **error** (Object) ： error 信息
+
+  - **state:changed** 状态发生变化，处理函数的参数如下：
+      - **stateInfo** (Object) ： 状态信息，该对象结构如下：
+
+          ```js
+          {
+            "previous": "oldState",
+            "current": "newState"
+          }
+          ```
+
+  - **failed** 初始化上传组件失败，处理函数的参数如下：
+      - **error** (Object) ： error 信息
+ */
+
+ChatUploader = (function(superClass) {
+  extend(ChatUploader, superClass);
+
+
+  /*
+    @nodoc
+   */
+
+  function ChatUploader(engine) {
+    this.engine = engine;
+    this._requestPermission = bind(this._requestPermission, this);
+    this._changstate = bind(this._changstate, this);
+    this.init = bind(this.init, this);
+    this._uploader = {};
+    this.state = 'initialized';
+    this.messages = new Messages(this.engine);
+  }
+
+
+  /*
+    @nodoc
+    初始化 ChatUploader
+   */
+
+  ChatUploader.prototype.init = function(options) {
+    var button, errMsg, ref, self;
+    debug('uploader init', options);
+    if (!((ref = this.engine.options.chat) != null ? ref.enableMediaMessage : void 0)) {
+      errMsg = 'if you want use getVideoUploader you must enableMediaMessage';
+      this._changstate('failed');
+      this.trigger('failed', errMsg);
+      return Promise.reject(errMsg);
+    }
+    self = this;
+    if (options.browseButton != null) {
+      button = options.browseButton;
+    } else {
+      button = typeof document !== "undefined" && document !== null ? document.createElement('input') : void 0;
+    }
+    return loadJS.require('enableMediaMessage', this.engine.options.basePath).then(function() {
+      self._uploader = Qiniu.uploader({
+        runtimes: 'html5,flash,html4',
+        browse_button: button,
+        uptoken: self.engine.chatManager.user.uploadToken,
+        domain: 'domain',
+        chunk_size: '4mb',
+        dragdrop: true,
+        drop_element: options.dropElement,
+        max_file_size: '100mb',
+        save_key: true,
+        auto_start: true,
+        x_vars: {
+          'targetId': options.target
+        },
+        init: {
+          'FileUploaded': function(uploader, file, info) {
+            var message;
+            debug('file uploaded, wait to send', info);
+            self.trigger('upload:done', file, info);
+            info = JSON.parse(info);
+            message = {
+              content: {
+                type: options.messageType,
+                file: {
+                  key: info.key,
+                  name: info.fname,
+                  size: info.fsize,
+                  etag: info.etag,
+                  mimeType: info.mimeType
+                }
+              },
+              type: options.type,
+              to: options.target,
+              from: self.engine.chatManager.user.userId
+            };
+            switch (options.messageType) {
+              case 'image':
+                message.content.file.width = info.imageInfo.width;
+                message.content.file.height = info.imageInfo.height;
+                break;
+              case 'voice':
+                message.content.file.duration = info.avinfo.audio.duration;
+                break;
+              case 'video':
+                message.content.file.width = info.avinfo.video.width;
+                message.content.file.height = info.avinfo.video.height;
+                message.content.file.duration = info.avinfo.video.duration || info.avinfo.format.duration;
+            }
+            self.trigger('message:sending', message);
+            if (options.extra) {
+              message.extra = options.extra;
+            }
+            return self.messages.send(message).then(function(sentMessage) {
+              sentMessage.createdAt = new Date().toISOString();
+              sentMessage.state = 'sent';
+              return self.trigger('message:sent', sentMessage);
+            })["catch"](function(err) {
+              debug('send message failed', err);
+              return self.trigger('message:sendFailed', err);
+            });
+          },
+          'Error': function(uploader, err, errTip) {
+            debug('init uploader failed', err, errTip);
+            return self.trigger('upload:error', err, errTip);
+          }
+        }
+      });
+      return self._uploader.bind('StateChanged', function(uploader) {
+        switch (uploader.state) {
+          case 1:
+            return self._changstate('uploaded');
+          case 2:
+            return self._changstate('uploading');
+        }
+      });
+    })["catch"](function(err) {
+      debug('Init uploader failed', err);
+      self._changstate('failed');
+      return self.trigger('failed', err);
+    });
+  };
+
+
+  /*
+    @nodoc
+   */
+
+  ChatUploader.prototype._changstate = function(state) {
+    var previous, ref, stateInfo;
+    if ('string' !== typeof state) {
+      return;
+    }
+    ref = [this.state, state], previous = ref[0], this.state = ref[1];
+    stateInfo = {
+      previous: previous,
+      current: this.state
+    };
+    debug('state changed', stateInfo);
+    return this.trigger('state:changed', stateInfo);
+  };
+
+
+  /*
+    @nodoc
+    Destroy ChatUploader and remove chatUploader all eventlistener.
+   */
+
+  ChatUploader.prototype.destroy = function() {
+    var ref, ref1, ref2;
+    if ((ref = this.mediaConstraints) != null ? ref.video : void 0) {
+      if ((ref1 = this.stream) != null) {
+        ref1.stop();
+      }
+      this.recordRTC = null;
+    }
+    if ((ref2 = this._uploader) != null) {
+      ref2.destroy();
+    }
+    return this.unbind();
+  };
+
+
+  /*
+    @nodoc
+   */
+
+  ChatUploader.prototype._requestPermission = function(config, onMediaSuccessHandlerName, onMediaSuccessHandlerOptions) {
+    var e, error, onMediaError, onMediaSuccess;
+    if (!this.mediaConstraints) {
+      return;
+    }
+    this._changstate('initializing');
+    onMediaSuccess = (function(_this) {
+      return function(stream) {
+        _this._changstate('initialized');
+        _this.stream = stream;
+        _this.recordRTC = RecordRTC(stream, config);
+        if (_this[onMediaSuccessHandlerName] != null) {
+          return _this[onMediaSuccessHandlerName](onMediaSuccessHandlerOptions);
+        }
+      };
+    })(this);
+    onMediaError = (function(_this) {
+      return function(err) {
+        _this._changstate('failed');
+        _this.trigger('failed', err);
+        return console.warn('Can not open media!!!', err);
+      };
+    })(this);
+    try {
+      return navigator.getUserMedia(this.mediaConstraints, onMediaSuccess, onMediaError);
+    } catch (error) {
+      e = error;
+      return this._onMediaError('Your browser does not support getUserMedia');
+    }
+  };
+
+  return ChatUploader;
+
+})(EventEmitter);
+
+module.exports = ChatUploader;
+
+
+
+},{"../../utils/eventEmitter":30,"../../utils/promise":32,"../../utils/requester/loadJS":35,"../messages":18,"debug":38}],22:[function(require,module,exports){
+'use strict';
+var ChatUploader, ChatVideoUploader, debug,
+  bind = function(fn, me){ return function(){ return fn.apply(me, arguments); }; },
+  extend = function(child, parent) { for (var key in parent) { if (hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
+  hasProp = {}.hasOwnProperty;
+
+debug = require('debug')('engine:chat:ChatVideoUploader');
+
+ChatUploader = require('./uploader');
+
+
+/*
+  用于实现视频上传
+
+  浏览器兼容
+  -------------------------------
+  - **Chrome** (所有版本) 注：所录制视频不包含声音
+  - **Firefox** (>= 29)
+
+  属性
+  --------------------------------------------------------
+  - **state**  (String) - 状态，除继承自 {ChatUploader} 的枚举值以外，增加了以下枚举值：
+      - `recording` ： 正在录制
+      - `recorded` ： 录制成功
+
+  事件
+
+  除继承自 {ChatUploader} 的事件以外，增加了以下事件：
+
+  -------------------------------
+  - **record:started** 开始录制视频
+      - 无参数
+  - **record:stopped** 停止录制，处理函数的参数如下：
+      - **videoURL** (String) ： 视频文件的 URL
+      - **duration** (Number) ： 视频文件的时长
+ */
+
+ChatVideoUploader = (function(superClass) {
+  extend(ChatVideoUploader, superClass);
+
+
+  /*
+    @nodoc
+   */
+
+  function ChatVideoUploader(engine) {
+    this.engine = engine;
+    this.getRealTimeData = bind(this.getRealTimeData, this);
+    this.send = bind(this.send, this);
+    this._stopHandler = bind(this._stopHandler, this);
+    this.stopRecord = bind(this.stopRecord, this);
+    this.startRecord = bind(this.startRecord, this);
+    this.requestPermission = bind(this.requestPermission, this);
+    ChatVideoUploader.__super__.constructor.call(this, this.engine);
+    this.mediaConstraints = {
+      video: true
+    };
+    this.isChrome = typeof navigator.webkitGetUserMedia !== 'undefined';
+    if (!this.isChrome) {
+      this.mediaConstraints.audio = true;
+    }
+  }
+
+
+  /*
+    向浏览器请求权限，Engine 在初始化时会自动调用一次。若需要在此请求权限，调用此方法。
+  
+    @example 向浏览器请求录音权限
+      videoUploader.requestPermission()
+   */
+
+  ChatVideoUploader.prototype.requestPermission = function(onMediaSuccessHandlerName, onMediaSuccessHandlerOptions) {
+    var config;
+    config = {
+      disableLogs: true,
+      type: 'video',
+      video: {
+        width: 320,
+        height: 240
+      },
+      canvas: {
+        width: 320,
+        height: 240
+      }
+    };
+    if (!this.isChrome) {
+      config = {
+        disableLogs: true
+      };
+    }
+    return this._requestPermission(config, onMediaSuccessHandlerName, onMediaSuccessHandlerOptions);
+  };
+
+
+  /*
+    @nodoc
+    初始化视频上传
+   */
+
+  ChatVideoUploader.prototype.init = function(options) {
+    options.messageType = 'video';
+    return ChatVideoUploader.__super__.init.call(this, options);
+  };
+
+
+  /*
+    开始录制视频
+  
+    @note 视频上传最大60秒，超出时间后会自动停止。
+    @param [Sting] video DOM 节点，用于录制时显示实时画面
+  
+    @example 开始录制视频
+      video = document.getElementById("#video");
+      videoUploader.startRecord(video)
+   */
+
+  ChatVideoUploader.prototype.startRecord = function(video) {
+    var ref, videoURL;
+    if ((ref = this.state) === 'recording' || ref === 'uploading') {
+      return;
+    }
+    if (!this.recordRTC) {
+      return this.requestPermission('startRecord', video);
+    }
+    this._changstate('recording');
+    this.trigger('record:started');
+    this.recordRTC.blob = null;
+    this.duration = null;
+    this.recordRTC.startRecording();
+    videoURL = URL.createObjectURL(this.stream);
+    video.src = videoURL;
+    video.autoplay = true;
+    this.startTime = new Date().getTime();
+    return this.recordTimer = setTimeout((function(_this) {
+      return function() {
+        return _this.stopRecord();
+      };
+    })(this), 60 * 1000);
+  };
+
+
+  /*
+    结束视频录制
+  
+    @example 结束视频录制
+      videoUploader.stopRecord()
+   */
+
+  ChatVideoUploader.prototype.stopRecord = function() {
+    if (this.state !== 'recording') {
+      return console.warn('You have to perform when you record.');
+    }
+    if (!this.recordRTC) {
+      return this.requestPermission('stopRecord');
+    }
+    if (this.recordTimer != null) {
+      clearTimeout(this.recordTimer);
+    }
+    return this.recordRTC.stopRecording((function(_this) {
+      return function(videoURL) {
+        _this._changstate('recorded');
+        _this.tmpVideoURL = videoURL;
+        return _this._stopHandler(videoURL);
+      };
+    })(this));
+  };
+
+
+  /*
+    @nodoc
+   */
+
+  ChatVideoUploader.prototype._stopHandler = function(videoURL) {
+    if (!this.duration) {
+      this.duration = new Date().getTime() - this.startTime;
+    }
+    return this.trigger('record:stop', videoURL, this.duration);
+  };
+
+
+  /*
+    停止录制并发送
+  
+    @example 停止录制并发送
+      videoUploader.send()
+      videoUploader.bind('message:sent', function(message) {
+        console.log('视频消息发送成功');
+      });
+   */
+
+  ChatVideoUploader.prototype.send = function() {
+    if (this.state === 'uploading') {
+      return console.warn('Please wait for the upload.');
+    }
+    if (!this.recordRTC) {
+      return this.requestPermission();
+    }
+    if (this.recordTimer != null) {
+      clearTimeout(this.recordTimer);
+    }
+    if (this.state === 'recorded') {
+      this._uploader.addFile(this.recordRTC.getBlob());
+      this._stopHandler(this.tmpVideoURL);
+      return;
+    }
+    return this.recordRTC.stopRecording((function(_this) {
+      return function(videoURL) {
+        var recordedBlob;
+        recordedBlob = _this.recordRTC.getBlob();
+        if (recordedBlob != null) {
+          _this._uploader.addFile(recordedBlob);
+        }
+        return _this._stopHandler(videoURL);
+      };
+    })(this));
+  };
+
+
+  /*
+    获取未播放时显示的画面
+  
+    @example 获取未播放时显示的画面
+      video = document.getElementById("#video");
+      videoUploader.getRealTimeData(video)
+   */
+
+  ChatVideoUploader.prototype.getRealTimeData = function(video) {
+    var videoURL;
+    if (this.state === 'recording') {
+      return console.warn('You must stop recording.');
+    }
+    if (!this.recordRTC) {
+      return this.requestPermission('getRealTimeData', video);
+    }
+    this.recordRTC.startRecording();
+    videoURL = URL.createObjectURL(this.stream);
+    video.src = videoURL;
+    return video.autoplay = true;
+  };
+
+  return ChatVideoUploader;
+
+})(ChatUploader);
+
+module.exports = ChatVideoUploader;
+
+
+
+},{"./uploader":21,"debug":38}],23:[function(require,module,exports){
+'use strict';
+var ChatUploader, ChatVoiceUploader, debug,
+  bind = function(fn, me){ return function(){ return fn.apply(me, arguments); }; },
+  extend = function(child, parent) { for (var key in parent) { if (hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
+  hasProp = {}.hasOwnProperty;
+
+debug = require('debug')('engine:chat:ChatVoiceUploader');
+
+ChatUploader = require('./uploader');
+
+
+/*
+  用于实现语音上传
+
+  浏览器兼容
+  -------------------------------
+  - **Chrome** (所有版本)
+  - **Firefox** (>= 29)
+
+  属性
+  --------------------------------------------------------
+  - **state**  (String) - 状态，除继承自 {ChatUploader} 的枚举值以外，增加了以下枚举值：
+      - `recording` ： 正在录制
+      - `recorded` ： 录制成功
+
+  事件
+
+  除继承自 {ChatUploader} 的事件以外，增加了以下事件：
+
+  -------------------------------
+  - **record:started** 开始录制语音
+      - 无参数
+  - **record:stopped** 停止录制，处理函数的参数如下：
+      - **blob** (Object) ： 存储了语音信息的 blob 对象
+      - **duration** (Number) ： 视频文件的时长
+ */
+
+ChatVoiceUploader = (function(superClass) {
+  extend(ChatVoiceUploader, superClass);
+
+
+  /*
+    @nodoc
+   */
+
+  function ChatVoiceUploader(engine) {
+    this.engine = engine;
+    this.send = bind(this.send, this);
+    this._stopHandler = bind(this._stopHandler, this);
+    this.stopRecord = bind(this.stopRecord, this);
+    this.startRecord = bind(this.startRecord, this);
+    this.requestPermission = bind(this.requestPermission, this);
+    ChatVoiceUploader.__super__.constructor.call(this, this.engine);
+    this.mediaConstraints = {
+      audio: true
+    };
+    this.isChrome = typeof navigator.webkitGetUserMedia !== 'undefined';
+  }
+
+
+  /*
+    向浏览器请求录音权限， Engine 在初始化时会自动调用一次。若需要在此请求权限，调用此方法。
+  
+    @example 向浏览器请求录音权限
+      voiceUploader.requestPermission()
+   */
+
+  ChatVoiceUploader.prototype.requestPermission = function(onMediaSuccessHandlerName, onMediaSuccessHandlerOptions) {
+    var config;
+    config = {
+      disableLogs: true
+    };
+    if (this.isChrome) {
+      config.compression = 8;
+    }
+    return this._requestPermission(config, onMediaSuccessHandlerName, onMediaSuccessHandlerOptions);
+  };
+
+
+  /*
+    @nodoc
+    初始化语音上传
+   */
+
+  ChatVoiceUploader.prototype.init = function(options) {
+    options.messageType = 'voice';
+    return ChatVoiceUploader.__super__.init.call(this, options);
+  };
+
+
+  /*
+    开始录音
+  
+    @note 语音上传最大60秒，超出时间后会自动停止。
+  
+    @example 开始录音
+      voiceUploader.startRecord()
+   */
+
+  ChatVoiceUploader.prototype.startRecord = function() {
+    var ref;
+    if ((ref = this.state) === 'recording' || ref === 'uploading') {
+      return;
+    }
+    if (!this.recordRTC) {
+      return this.requestPermission('startRecord');
+    }
+    this._changstate('recording');
+    this.trigger('record:started');
+    this.recordRTC.blob = null;
+    this.duration = null;
+    this.recordRTC.startRecording();
+    this.startTime = new Date().getTime();
+    return this.recordTimer = setTimeout((function(_this) {
+      return function() {
+        return _this.stopRecord();
+      };
+    })(this), 60 * 1000);
+  };
+
+
+  /*
+    结束录音
+  
+    @example 结束录音
+      voiceUploader.stopRecord()
+   */
+
+  ChatVoiceUploader.prototype.stopRecord = function() {
+    if (this.state !== 'recording') {
+      return console.warn('You have to perform when you record.');
+    }
+    if (!this.recordRTC) {
+      return this.requestPermission('stopRecord');
+    }
+    return this.recordRTC.stopRecording((function(_this) {
+      return function(audioURL) {
+        _this._changstate('recorded');
+        return _this._stopHandler();
+      };
+    })(this));
+  };
+
+
+  /*
+    @nodoc
+   */
+
+  ChatVoiceUploader.prototype._stopHandler = function() {
+    if (this.recordTimer != null) {
+      clearTimeout(this.recordTimer);
+    }
+    if (!this.duration) {
+      this.duration = new Date().getTime() - this.startTime;
+    }
+    return this.trigger('record:stopped', this.recordRTC.getBlob(), this.duration);
+  };
+
+
+  /*
+    停止录音并发送
+  
+    @example 停止录音并发送
+      voiceUploader.send()
+      voiceUploader.bind('message:sent', function(message) {
+        console.log('语音消息发送成功');
+      });
+   */
+
+  ChatVoiceUploader.prototype.send = function() {
+    if (this.state === 'uploading') {
+      return console.warn('Please wait for the upload.');
+    }
+    if (!this.recordRTC) {
+      return this.requestPermission();
+    }
+    return this.recordRTC.stopRecording((function(_this) {
+      return function(audioURL) {
+        var recordedBlob;
+        recordedBlob = _this.recordRTC.getBlob();
+        if (recordedBlob != null) {
+          _this._uploader.addFile(recordedBlob);
+        }
+        return _this._stopHandler();
+      };
+    })(this));
+  };
+
+  return ChatVoiceUploader;
+
+})(ChatUploader);
+
+module.exports = ChatVoiceUploader;
+
+
+
+},{"./uploader":21,"debug":38}],24:[function(require,module,exports){
+'use strict';
+var Promise, Users, chatManagerUtil, debug;
+
+debug = require('debug')('engine:chat:users');
+
+chatManagerUtil = require('../chatManagerUtil');
+
+Promise = require('../../utils/promise');
+
+
+/*
+  @nodoc
+ */
+
+Users = (function() {
+  function Users(engine) {
+    this.engine = engine;
+    void 0;
+  }
+
+  Users.prototype.loadGroupUsers = function(options) {
+    return this._getGroupUsers(options);
+  };
+
+  Users.prototype._getGroupUsers = function(options) {
+    return this.engine.chatManager.request('engine_chat:group:getUsers', options);
+  };
+
+  return Users;
+
+})();
+
+Promise.toPromise(Users);
+
+module.exports = Users;
+
+
+
+},{"../../utils/promise":32,"../chatManagerUtil":10,"debug":38}],25:[function(require,module,exports){
 (function (process){
 'use strict';
 var Connection, EventEmitter, Protocol, ServerAddrManager, Utils, debug, eio,
-  __extends = function(child, parent) { for (var key in parent) { if (__hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
-  __hasProp = {}.hasOwnProperty;
+  extend = function(child, parent) { for (var key in parent) { if (hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
+  hasProp = {}.hasOwnProperty;
 
 debug = require('debug')('engine:connection');
 
@@ -604,29 +4527,56 @@ Utils = require('../utils');
 Protocol = require('../protocol');
 
 
-/**
- * Wrapper of engine.io Socket.
- *
- * Emit following state change related events:
- *   - initialized - initial state, never transitioned to
- *   - connected - connection has been fully established
- *   - disconnected - on requested disconnection
- *   - state_changed, { previous, current } - every time state changes
- *
- * Emit following message related events:
- *   - message, {} - a message is successfully decoded
- *   - error, {} - a message decoding failed or a connection error is received
+/*
+  Connection 类
+
+  属性
+  --------------------------------------------------------
+  - **state**  (String) - 状态，枚举值如下：
+      - `initialized` ： 初始状态，连接尚未发起。
+      - `connecting` ： 连接中，自动重连时也会进入该状态。通过绑定 `connecting_in` `Event` 可以获取下次尝试连接将在多久以后。
+      - `connected` ： 连接已建立。
+      - `failed` ： 连接无法建立。浏览器不兼容，客户端 SDK 配置错误或过时。通过绑定 `error` `Event` 可以获取具体错误信息。
+      - `disconnected`: 之前连接过，现在已被主动断开。
+
+  事件
+  -------------------------------
+  - **state_changed** 状态改变时触发，处理函数的参数如下：
+      - **state** (Object) ： 状态信息，该对象结构如下：
+
+          ```js
+          {
+            "previous": "oldState",
+            "current": "newState"
+          }
+          ```
+
+  - **connecting_in** 将在几秒后重新连接，处理函数的参数如下：
+      - **delay** (Number) ： 用于通知下次重连是在 delay 秒后
+
+  - **error** 发生错误
+      - **error** (Object) ： error 信息
  */
 
-Connection = (function(_super) {
-  __extends(Connection, _super);
+Connection = (function(superClass) {
+  extend(Connection, superClass);
 
-  function Connection(_at_engine) {
-    this.engine = _at_engine;
+
+  /*
+   @nodoc
+   */
+
+  function Connection(engine) {
+    this.engine = engine;
     this._serverAddrManager = new ServerAddrManager(this.engine);
     this._updateState('initialized');
     this._connect();
   }
+
+
+  /*
+   @nodoc
+   */
 
   Connection.prototype._updateState = function(newState) {
     var oldState;
@@ -637,14 +4587,19 @@ Connection = (function(_super) {
     this.state = newState;
     return process.nextTick((function(_this) {
       return function() {
-        _this.emit('state_changed', {
+        _this.trigger('state_changed', {
           previous: oldState,
           current: newState
         });
-        return _this.emit(newState);
+        return _this.trigger(newState);
       };
     })(this));
   };
+
+
+  /*
+   @nodoc
+   */
 
   Connection.prototype._handleConnectionEvent = function(event) {
     switch (event.name) {
@@ -653,12 +4608,17 @@ Connection = (function(_super) {
         return this._updateState('connected');
       case 'engine_connection:error':
         this._lastEngineError = event.data;
-        return this.emit('error', {
+        return this.trigger('error', {
           code: event.data.code,
           message: event.data.message
         });
     }
   };
+
+
+  /*
+   @nodoc
+   */
 
   Connection.prototype._handleResponseEvent = function(event) {
     var callback;
@@ -677,13 +4637,18 @@ Connection = (function(_super) {
     }
   };
 
+
+  /*
+   @nodoc
+   */
+
   Connection.prototype._connect = function(onSocketCreated) {
-    var availableEvents, event, fakeSocket, listener, serverAddr, _i, _len, _results;
-    serverAddr = this._serverAddrManager.addr;
+    var availableEvents, event, fakeSocket, i, len, listener, ref, results, serverAddr, start;
+    serverAddr = ((ref = this.engine.options) != null ? ref.serverAddr : void 0) || this._serverAddrManager.addr;
     if (!serverAddr) {
       this._socket = new EventEmitter();
       this._serverAddrManager.refresh();
-      this._serverAddrManager.once('refreshed', (function(_this) {
+      this._serverAddrManager.bindOnce('refreshed', (function(_this) {
         return function(err) {
           if (err) {
             _this._lastEngineError = err;
@@ -706,17 +4671,20 @@ Connection = (function(_super) {
       }
     });
     this._socket.pendingCallbacks = {};
+    start = new Date().getTime();
     this._socket.on('open', function() {
-      return debug('socket open');
+      var end;
+      end = new Date().getTime();
+      return debug('socket open', (end - start) + "ms");
     });
     this._socket.on('message', (function(_this) {
       return function(message) {
-        var err, event;
+        var err, error, event;
         try {
           event = Protocol.decodeEvent(message);
-        } catch (_error) {
-          err = _error;
-          return _this.emit('error', err);
+        } catch (error) {
+          err = error;
+          return _this.trigger('error', err);
         }
         debug('got event', event);
         if (Protocol.connectionEventNamePattern.test(event.name)) {
@@ -724,13 +4692,19 @@ Connection = (function(_super) {
         } else if (Protocol.responseEventNamePattern.test(event.name)) {
           return _this._handleResponseEvent(event);
         } else {
-          return _this.emit('event', event);
+          return _this.trigger('event', event);
         }
       };
     })(this));
     this._socket.on('close', (function(_this) {
       return function(reason) {
+        var callback, eventId, ref1;
         debug('socket close', reason);
+        ref1 = _this._socket.pendingCallbacks;
+        for (eventId in ref1) {
+          callback = ref1[eventId];
+          callback(Protocol.responseErrors.noConnection);
+        }
         _this._socket = null;
         return _this.socketId = null;
       };
@@ -743,23 +4717,31 @@ Connection = (function(_super) {
     });
     if (fakeSocket) {
       availableEvents = ['open', 'message', 'close', 'error', 'flush', 'drain', 'upgradeError', 'upgrade'];
-      _results = [];
-      for (_i = 0, _len = availableEvents.length; _i < _len; _i++) {
-        event = availableEvents[_i];
-        _results.push((function() {
-          var _j, _len1, _ref, _results1;
-          _ref = fakeSocket.listeners(event);
-          _results1 = [];
-          for (_j = 0, _len1 = _ref.length; _j < _len1; _j++) {
-            listener = _ref[_j];
-            _results1.push(this._socket.on(event, listener));
+      results = [];
+      for (i = 0, len = availableEvents.length; i < len; i++) {
+        event = availableEvents[i];
+        results.push((function() {
+          var j, len1, ref1, results1;
+          ref1 = fakeSocket.listeners(event);
+          results1 = [];
+          for (j = 0, len1 = ref1.length; j < len1; j++) {
+            listener = ref1[j];
+            results1.push(this._socket.on(event, listener));
           }
-          return _results1;
+          return results1;
         }).call(this));
       }
-      return _results;
+      return results;
     }
   };
+
+
+  /*
+   @nodoc
+    If it's a sync call, return boolean to indicate whether event is sent,
+    otherwise callback with error when the connection is not available
+    TODO: Retry
+   */
 
   Connection.prototype.sendEvent = function(name, data, callback) {
     var message;
@@ -792,12 +4774,19 @@ Connection = (function(_super) {
       }
     } else {
       if (callback) {
-        return callback(Protocol.responseErrors.noConnection);
+        return setTimeout(function() {
+          return callback(Protocol.responseErrors.noConnection);
+        }, 0);
       } else {
         return false;
       }
     }
   };
+
+
+  /*
+   @nodoc
+   */
 
   Connection.prototype.sendResponseEvent = function(eventId, err, result) {
     var data;
@@ -816,12 +4805,35 @@ Connection = (function(_super) {
     return this.sendEvent('engine_response', data);
   };
 
+
+  /*
+    @example 断开连接
+      engine.connection.disconnect();
+    断开连接
+   */
+
   Connection.prototype.disconnect = function() {
-    var _ref;
-    if ((_ref = this._socket) != null) {
-      _ref.close();
+    var ref;
+    if ((ref = this._socket) != null) {
+      if (typeof ref.close === "function") {
+        ref.close();
+      }
     }
     return this._updateState('disconnected');
+  };
+
+
+  /*
+    @example 恢复连接
+      engine.connection.connect();
+    恢复连接
+   */
+
+  Connection.prototype.connect = function() {
+    if (this.state !== 'disconnected') {
+      return;
+    }
+    return this._connect();
   };
 
   return Connection;
@@ -833,33 +4845,31 @@ module.exports = Connection;
 
 
 }).call(this,require('_process'))
-},{"../protocol":12,"../utils":14,"../utils/eventEmitter":13,"./serverAddrManager":10,"_process":57,"debug":19,"engine.io-client":22}],9:[function(require,module,exports){
+},{"../protocol":29,"../utils":31,"../utils/eventEmitter":30,"./serverAddrManager":27,"_process":78,"debug":38,"engine.io-client":41}],26:[function(require,module,exports){
 'use strict';
-var AutoReconnectConnection, Connection, UNAVAILABLE_THRESHOLD, debug,
-  __extends = function(child, parent) { for (var key in parent) { if (__hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
-  __hasProp = {}.hasOwnProperty;
+var AutoReconnectConnection, Connection, debug,
+  extend = function(child, parent) { for (var key in parent) { if (hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
+  hasProp = {}.hasOwnProperty;
 
 debug = require('debug')('engine:connection');
 
 Connection = require('./connection');
 
-UNAVAILABLE_THRESHOLD = 30 * 1000;
 
-
-/**
+/*
+ @nodoc
  * Enhance Connection with auto reconnect function.
  *
  * Emit following state change related events:
  *   - connecting - connection is being established
- *   - unavailable - after connection timeout or when there's no network
  *   - failed - when the connection strategy is not supported
  */
 
-AutoReconnectConnection = (function(_super) {
-  __extends(AutoReconnectConnection, _super);
+AutoReconnectConnection = (function(superClass) {
+  extend(AutoReconnectConnection, superClass);
 
-  function AutoReconnectConnection(_at_engine) {
-    this.engine = _at_engine;
+  function AutoReconnectConnection(engine) {
+    this.engine = engine;
     AutoReconnectConnection.__super__.constructor.call(this, this.engine);
     this._resetReconnectState();
   }
@@ -879,8 +4889,8 @@ AutoReconnectConnection = (function(_super) {
   };
 
   AutoReconnectConnection.prototype._reconnect = function(reconnectStrategy, reconnectIn, reconnectInMax) {
-    var backoffIn, error, _base, _ref, _ref1, _ref2, _ref3;
-    if ((_ref = this.state) === 'disconnected' || _ref === 'failed') {
+    var backoffIn, base, error, ref, ref1, ref2, ref3;
+    if ((ref = this.state) === 'disconnected' || ref === 'failed') {
       return;
     }
     if (this._reconnectTimer) {
@@ -889,18 +4899,18 @@ AutoReconnectConnection = (function(_super) {
     if (this._lastEngineError) {
       error = this._lastEngineError;
       this._lastEngineError = null;
-      if ((4000 <= (_ref1 = error.code) && _ref1 <= 4099)) {
+      if ((4000 <= (ref1 = error.code) && ref1 <= 4099)) {
         return this._updateState('failed');
-      } else if ((4100 <= (_ref2 = error.code) && _ref2 <= 4199)) {
+      } else if ((4100 <= (ref2 = error.code) && ref2 <= 4199)) {
         if (error.reconnectRefreshServerAddr) {
           this._serverAddrManager.refresh();
         }
         return this._reconnect(error.reconnectStrategy, error.reconnectIn, error.reconnectInMax);
-      } else if ((4200 <= (_ref3 = error.code) && _ref3 <= 4399)) {
+      } else if ((4200 <= (ref3 = error.code) && ref3 <= 4399)) {
         return this._reconnect();
       }
     }
-    (_base = this._reconnectState).startTime || (_base.startTime = new Date());
+    (base = this._reconnectState).startTime || (base.startTime = new Date());
     this._reconnectState.strategy = reconnectStrategy || this._reconnectState.strategy;
     this._reconnectState["in"] = reconnectIn != null ? reconnectIn : this._reconnectState["in"];
     this._reconnectState.inMax = reconnectInMax != null ? reconnectInMax : this._reconnectState.inMax;
@@ -925,18 +4935,12 @@ AutoReconnectConnection = (function(_super) {
       };
     })(this), this._reconnectState["in"]);
     debug('reconnect', this._reconnectState);
-    this.emit('connecting_in', this._reconnectState["in"]);
-    if ((new Date() - this._reconnectState.startTime) >= UNAVAILABLE_THRESHOLD) {
-      return this._updateState('unavailable');
-    } else {
-      return this._updateState('connecting');
-    }
+    this.trigger('connecting_in', this._reconnectState["in"]);
+    return this._updateState('connecting');
   };
 
   AutoReconnectConnection.prototype._connect = function() {
-    if (this.state !== 'unavailable') {
-      this._updateState('connecting');
-    }
+    this._updateState('connecting');
     AutoReconnectConnection.__super__._connect.call(this);
     this._socket.on('open', (function(_this) {
       return function() {
@@ -963,11 +4967,13 @@ module.exports = AutoReconnectConnection;
 
 
 
-},{"./connection":8,"debug":19}],10:[function(require,module,exports){
+},{"./connection":25,"debug":38}],27:[function(require,module,exports){
 'use strict';
-var EventEmitter, GET_SERVER_ADDR_URL, Requester, ServerAddrManager,
-  __extends = function(child, parent) { for (var key in parent) { if (__hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
-  __hasProp = {}.hasOwnProperty;
+var EventEmitter, GET_SERVER_ADDR_URL, Requester, ServerAddrManager, debug,
+  extend = function(child, parent) { for (var key in parent) { if (hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
+  hasProp = {}.hasOwnProperty;
+
+debug = require('debug')('engine:connection:serverAddrManager');
 
 EventEmitter = require('../utils/eventEmitter');
 
@@ -975,30 +4981,44 @@ Requester = require('../utils/requester');
 
 GET_SERVER_ADDR_URL = 'https://api.tuisongbao.com:443/v2/sdk/engine/server';
 
-ServerAddrManager = (function(_super) {
-  __extends(ServerAddrManager, _super);
 
-  function ServerAddrManager(_at_engine) {
-    this.engine = _at_engine;
+/*
+  @nodoc
+ */
+
+ServerAddrManager = (function(superClass) {
+  extend(ServerAddrManager, superClass);
+
+  function ServerAddrManager(engine) {
+    this.engine = engine;
     this._refreshing = false;
   }
 
   ServerAddrManager.prototype.refresh = function() {
+    var startAt;
     if (this._refreshing) {
       return;
     }
     this.addr = null;
     this._refreshing = true;
+    startAt = new Date().getTime();
     return Requester.getWithJSONPFallback(GET_SERVER_ADDR_URL, {
       appId: this.engine.appId
     }, (function(_this) {
-      return function(err, server) {
+      return function(err, res) {
+        var endAt;
+        endAt = new Date().getTime();
+        debug('Got server addr response', {
+          err: err,
+          res: res,
+          elapsed: (endAt - startAt) + "ms"
+        });
         _this._refreshing = false;
         if (err) {
-          return _this.emit('refreshed', err);
+          return _this.trigger('refreshed', err);
         } else {
-          _this.addr = server.addr;
-          return _this.emit('refreshed');
+          _this.addr = res.addr;
+          return _this.trigger('refreshed');
         }
       };
     })(this), this.engine.options);
@@ -1012,9 +5032,35 @@ module.exports = ServerAddrManager;
 
 
 
-},{"../utils/eventEmitter":13,"../utils/requester":15}],11:[function(require,module,exports){
+},{"../utils/eventEmitter":30,"../utils/requester":33,"debug":38}],28:[function(require,module,exports){
 'use strict';
-var Authorizer, Channels, ChatManager, Connection, Engine, Protocol, Utils, debug;
+var Authorizer, Channels, ChatManager, Connection, Engine, Promise, Protocol, Utils, _log, debug,
+  slice = [].slice;
+
+_log = require('debug').log;
+
+require('debug').log = function() {
+  var arg, args, formattedArgs;
+  args = 1 <= arguments.length ? slice.call(arguments, 0) : [];
+  formattedArgs = (function() {
+    var error, i, len, results;
+    results = [];
+    for (i = 0, len = args.length; i < len; i++) {
+      arg = args[i];
+      try {
+        if (arg instanceof Error) {
+          results.push(arg);
+        } else {
+          results.push(JSON.stringify(arg));
+        }
+      } catch (error) {
+        results.push(arg);
+      }
+    }
+    return results;
+  })();
+  return _log.apply(this, formattedArgs);
+};
 
 debug = require('debug')('engine:index');
 
@@ -1026,22 +5072,71 @@ Authorizer = require('./authorizer');
 
 Channels = require('./channels');
 
-ChatManager = require('./chatManager');
+ChatManager = require('./chat');
 
 Protocol = require('./protocol');
 
+Promise = require('./utils/promise');
+
+
+/*
+  推送宝实时引擎客户端 SDK 的入口
+
+  属性
+  --------------------------------------------------------
+
+  - **chatManager** ([ChatManager](./ChatManager.html)) - Chat 管理对象
+  - **channels** ([Channel](./Channels.html)) - Channel 管理对象
+  - **connection**  ([Connection](./Connection.html)) - Connection 管理对象
+ */
+
 Engine = (function() {
-  function Engine(_at_appId, _at_options) {
-    this.appId = _at_appId;
-    this.options = _at_options;
+
+  /*
+    构造函数.
+  
+    @example 实例化 Engine
+      var options = {
+        authEndpoint: '/api/engineDemo/authUser',
+        authTransport: 'jsonp',
+        basePath: '/engine/clientJavaScript/',
+        chat: {
+          enableCache: true,
+          enableMediaMessage: true
+        }
+      };
+  
+      var engine = new Engine('YOUR_APP_ID', options);
+  
+    @param [Sting] @appId YOUR_APP_ID
+    @param [Object] options 构造参数
+    @option options [String] `authEndpoint`
+      认证用户请求方式，默认为 `xhr` ，使用 `XMLHttpRequest`
+      ，但是该方式在 IE8/9 上存在跨域问题，如果你配置的 `authEndpoint` 跨域并且需要支持 IE8/9
+      ，应使用 `jsonp` ，同时请确保你的服务端支持 `jsonp` 请求，该设置在所有浏览器上生效，并非仅在 IE8/9 上生效
+    @option options [String] authData 如果配置，认证请求将携带该值，可以用来表明用户身份。当结合 jsonp 使用时，该值如果为 Object ，会被序列化成 JSON 字符串, 可选。
+    @option options [String] basePath 扩展功能 `Lib` 的地址
+    @option options [Object] chat chat 的功能配置
+    @option options [Object] chat
+      chat 为 engine 上 chat 相关的配置，配置方法如下：
+      chat: {扩展功能: true | false ...}
+   */
+  function Engine(appId, options) {
+    this.appId = appId;
+    this.options = options;
     if (!this.appId) {
       Utils.throwError('appId is required.');
     }
-    this.version = 'v1.0.0';
+    this.version = 'v2.1.0';
     this.connection = new Connection(this);
     this.authorizer = new Authorizer(this);
     this.channels = new Channels(this);
     this.chatManager = new ChatManager(this);
+    if (typeof window !== "undefined" && window !== null) {
+      if (window.Promise == null) {
+        window.Promise = Promise;
+      }
+    }
     this.connection.bind('state_changed', function(states) {
       return debug('connection state_changed', states);
     });
@@ -1050,7 +5145,7 @@ Engine = (function() {
     });
     this.connection.bind('connected', (function(_this) {
       return function() {
-        _this.channels.subscribe();
+        _this.channels.subscribeAll();
         return _this.chatManager.autoLogin();
       };
     })(this));
@@ -1058,7 +5153,7 @@ Engine = (function() {
       return function(event) {
         var channel;
         if (event.channel) {
-          channel = _this.channel(event.channel);
+          channel = _this.channels.find(event.channel);
           return channel.handleEvent(event);
         } else if (Protocol.chatEventNamePattern.test(event.name)) {
           return _this.chatManager.handleEvent(event);
@@ -1070,25 +5165,11 @@ Engine = (function() {
     });
     this.connection.bind('disconnected', (function(_this) {
       return function() {
+        _this.chatManager.handleNoConnectionOperations(true);
         return _this.channels.disconnect();
       };
     })(this));
   }
-
-  Engine.prototype.subscribe = function(channelName) {
-    Protocol.validateChannel(channelName);
-    return this.channels.add(channelName);
-  };
-
-  Engine.prototype.unsubscribe = function(channelName) {
-    Protocol.validateChannel(channelName);
-    return this.channels.remove(channelName);
-  };
-
-  Engine.prototype.channel = function(channelName) {
-    Protocol.validateChannel(channelName);
-    return this.channels.find(channelName);
-  };
 
   Engine.debug = require('debug');
 
@@ -1104,18 +5185,23 @@ module.exports = Engine;
 
 
 
-},{"./authorizer":1,"./channels":3,"./chatManager":7,"./connection":9,"./protocol":12,"./utils":14,"debug":19}],12:[function(require,module,exports){
+},{"./authorizer":1,"./channels":3,"./chat":17,"./connection":26,"./protocol":29,"./utils":31,"./utils/promise":32,"debug":38}],29:[function(require,module,exports){
 'use strict';
 var BaseProtocol, Protocol, utils,
-  __extends = function(child, parent) { for (var key in parent) { if (__hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
-  __hasProp = {}.hasOwnProperty;
+  extend = function(child, parent) { for (var key in parent) { if (hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
+  hasProp = {}.hasOwnProperty;
 
 BaseProtocol = require('../protocol');
 
 utils = require('./utils');
 
-Protocol = (function(_super) {
-  __extends(Protocol, _super);
+
+/*
+  @nodoc
+ */
+
+Protocol = (function(superClass) {
+  extend(Protocol, superClass);
 
   function Protocol() {
     return Protocol.__super__.constructor.apply(this, arguments);
@@ -1131,24 +5217,48 @@ module.exports = Protocol;
 
 
 
-},{"../protocol":18,"./utils":14}],13:[function(require,module,exports){
+},{"../protocol":37,"./utils":31}],30:[function(require,module,exports){
 'use strict';
 var EventEmitter, events,
-  __extends = function(child, parent) { for (var key in parent) { if (__hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
-  __hasProp = {}.hasOwnProperty;
+  extend = function(child, parent) { for (var key in parent) { if (hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
+  hasProp = {}.hasOwnProperty;
 
 events = require('events');
 
-EventEmitter = (function(_super) {
-  __extends(EventEmitter, _super);
+
+/*
+  事件相关
+ */
+
+EventEmitter = (function(superClass) {
+  extend(EventEmitter, superClass);
 
   function EventEmitter() {
     return EventEmitter.__super__.constructor.apply(this, arguments);
   }
 
-  EventEmitter.prototype.bind = function(event, handler) {
-    return this.on(event, handler);
+
+  /*
+    添加一个 handler 到特定事件的 handler 数组中
+   */
+
+  EventEmitter.prototype.bind = function() {
+    return this.on.apply(this, arguments);
   };
+
+
+  /*
+    添加一个一次性 handler ，这个 handler 只会在下一次事件发生时被触发一次，触发完成后就被删除。
+   */
+
+  EventEmitter.prototype.bindOnce = function() {
+    return this.once.apply(this, arguments);
+  };
+
+
+  /*
+    根据参数中 handler ，从 handler 数组中删除 evnet 相关的一个 handler 或全部 handler
+   */
 
   EventEmitter.prototype.unbind = function(event, handler) {
     if (handler) {
@@ -1156,6 +5266,24 @@ EventEmitter = (function(_super) {
     } else {
       return this.removeAllListeners(event);
     }
+  };
+
+
+  /*
+    使用提供的参数按顺序执行指定事件的 handler
+   */
+
+  EventEmitter.prototype.trigger = function() {
+    return this.emit.apply(this, arguments);
+  };
+
+
+  /*
+    返回指定事件的 handler 数组
+   */
+
+  EventEmitter.prototype.handlers = function() {
+    return this.listeners.apply(this, arguments);
   };
 
   return EventEmitter;
@@ -1166,37 +5294,53 @@ module.exports = EventEmitter;
 
 
 
-},{"events":56}],14:[function(require,module,exports){
+},{"events":77}],31:[function(require,module,exports){
 (function (process){
 'use strict';
+
+/*
+  @nodoc
+ */
 var Utils;
 
 Utils = (function() {
   function Utils() {}
 
-  Utils.throwError = function(error) {
+  Utils.createError = function(error) {
     var err;
     err = new Error(error.message || error);
     err.name = 'EngineError';
-    throw err;
+    if (err.code == null) {
+      err.code = error.code || -1;
+    }
+    return err;
+  };
+
+  Utils.throwError = function(error) {
+    throw Utils.createError(error);
   };
 
   Utils.genRandomStr = function() {
     var i, possibleChars, randomChars;
     possibleChars = 'abcdefghijklmnopqrstuvwxyz_';
     randomChars = (function() {
-      var _i, _results;
-      _results = [];
-      for (i = _i = 0; _i < 20; i = ++_i) {
-        _results.push(possibleChars[Math.floor(Math.random() * possibleChars.length)]);
+      var j, results;
+      results = [];
+      for (i = j = 0; j < 20; i = ++j) {
+        results.push(possibleChars[Math.floor(Math.random() * possibleChars.length)]);
       }
-      return _results;
+      return results;
     })();
     return randomChars.join('');
   };
 
   Utils.checkBrowser = (function() {
     var match, platform_match, ret, ua;
+    if (typeof window === "undefined" || window === null) {
+      return function() {
+        return {};
+      };
+    }
     ua = window.navigator.userAgent.toLowerCase();
     match = /(edge)\/([\w.]+)/.exec(ua) || /(opr)[\/]([\w.]+)/.exec(ua) || /(chrome)[ \/]([\w.]+)/.exec(ua);
     match || (match = /(version)(applewebkit)[ \/]([\w.]+).*(safari)[ \/]([\w.]+)/.exec(ua));
@@ -1240,7 +5384,295 @@ module.exports = Utils;
 
 
 }).call(this,require('_process'))
-},{"_process":57}],15:[function(require,module,exports){
+},{"_process":78}],32:[function(require,module,exports){
+'use strict';
+var FULFILLED, PENDING, Promise, REJECTED, Utils, chatManagerUtil, debug, isArray, isFunction, isThenable,
+  hasProp = {}.hasOwnProperty;
+
+debug = require('debug')('engine:promise');
+
+Utils = require('../utils');
+
+chatManagerUtil = require('../chat/chatManagerUtil');
+
+PENDING = void 0;
+
+FULFILLED = 1;
+
+REJECTED = 2;
+
+isFunction = function(obj) {
+  return 'function' === typeof obj;
+};
+
+isArray = function(obj) {
+  return Object.prototype.toString.call(obj) === '[object Array]';
+};
+
+isThenable = function(obj) {
+  return obj && typeof obj['then'] === 'function';
+};
+
+
+/*
+  ES6 Promise
+  @see http://es6.ruanyifeng.com/#docs/promise ES6 Promise
+ */
+
+Promise = (function() {
+  function Promise(resolver) {
+    var reject, resolve;
+    if (!isFunction(resolver)) {
+      throw new TypeError('You must pass a resolver function as the first argument to the promise constructor');
+    }
+    if (!(this instanceof Promise)) {
+      return new Promise(resolver);
+    }
+    this._value;
+    this._reason;
+    this._status = PENDING;
+    this._resolveHandlers = [];
+    this._rejectHandlers = [];
+    resolve = (function(_this) {
+      return function(value) {
+        return _this.transite(FULFILLED, value);
+      };
+    })(this);
+    reject = (function(_this) {
+      return function(reason) {
+        return _this.transite(REJECTED, reason);
+      };
+    })(this);
+    resolver(resolve, reject);
+  }
+
+
+  /*
+    @nodoc
+   */
+
+  Promise.prototype.transite = function(status, value) {
+    if (this._status !== PENDING) {
+      return;
+    }
+    return setTimeout((function(_this) {
+      return function() {
+        _this._status = status;
+        return _this._publish(value);
+      };
+    })(this), 0);
+  };
+
+
+  /*
+    @nodoc
+   */
+
+  Promise.prototype._publish = function(val) {
+    var fn, queue, st;
+    st = this._status === FULFILLED;
+    queue = this[st ? '_resolveHandlers' : '_rejectHandlers'];
+    if (queue !== void 0) {
+      while (fn = queue.shift()) {
+        val = fn.call(this, val) || val;
+      }
+    }
+    this[st ? '_value' : '_reason'] = val;
+    return this['_resolveHandlers'] = this['_rejectHandlers'] = void 0;
+  };
+
+  Promise.prototype.then = function(onFulfilled, onRejected) {
+    var promise;
+    promise = this;
+    return new Promise(function(resolve, reject) {
+      var callback, errback;
+      callback = function(value) {
+        var e, error, ret;
+        try {
+          ret = isFunction(onFulfilled) && onFulfilled(value) || value;
+          if (isThenable(ret)) {
+            return ret.then(function(value) {
+              return resolve(value);
+            }, function(reason) {
+              return reject(reason);
+            });
+          } else {
+            return resolve(ret);
+          }
+        } catch (error) {
+          e = error;
+          return reject(e);
+        }
+      };
+      errback = function(reason) {
+        reason = isFunction(onRejected) && onRejected(reason) || reason;
+        return reject(reason);
+      };
+      if (promise._status === PENDING) {
+        promise._resolveHandlers.push(callback);
+        return promise._rejectHandlers.push(errback);
+      } else if (promise._status === FULFILLED) {
+        return callback(promise._value);
+      } else if (promise._status === REJECTED) {
+        return errback(promise._reason);
+      }
+    });
+  };
+
+  Promise.prototype["catch"] = function(onRejected) {
+    return this.then(void 0, onRejected);
+  };
+
+  Promise.prototype.delay = function(ms) {
+    return this.then(function(val) {
+      return Promise.delay(ms, val);
+    });
+  };
+
+  return Promise;
+
+})();
+
+Promise.delay = function(ms, val) {
+  return new Promise(function(resolve, reject) {
+    var err, error;
+    try {
+      return setTimeout(function() {
+        return resolve(val);
+      }, ms);
+    } catch (error) {
+      err = error;
+      return reject(err);
+    }
+  });
+};
+
+Promise.resolve = function(arg) {
+  return new Promise(function(resolve, reject) {
+    var err, error;
+    try {
+      return resolve(arg);
+    } catch (error) {
+      err = error;
+      return reject(err);
+    }
+  });
+};
+
+Promise.reject = function(arg) {
+  return new Promise(function(resolve, reject) {
+    var err, error;
+    try {
+      return reject(arg);
+    } catch (error) {
+      err = error;
+      return reject(err);
+    }
+  });
+};
+
+Promise.all = function(promises) {
+  if (!isArray(promises)) {
+    throw new TypeError('You must pass an array to all.');
+  }
+  return new Promise(function(resolve, reject) {
+    var i, length, ref, rejecter, resolveAll, resolver, result, results;
+    i = 0;
+    result = [];
+    length = promises.length;
+    if (length === 0) {
+      return resolve([]);
+    }
+    resolver = function(index) {
+      return function(value) {
+        return resolveAll(index, value);
+      };
+    };
+    rejecter = function(reason) {
+      return reject(reason);
+    };
+    resolveAll = function(index, value) {
+      result[index] = value;
+      if (index === (length - 1)) {
+        return resolve(result);
+      }
+    };
+    results = [];
+    while (i < length) {
+      if ((ref = promises[i]) != null) {
+        if (typeof ref.then === "function") {
+          ref.then(resolver(i), rejecter);
+        }
+      }
+      results.push(i++);
+    }
+    return results;
+  });
+};
+
+Promise.toPromise = function(clazz, includeFuncNames, excludeFuncNames) {
+  var k, ref, results, v;
+  ref = clazz.prototype;
+  results = [];
+  for (k in ref) {
+    if (!hasProp.call(ref, k)) continue;
+    v = ref[k];
+    if (!isFunction(v)) {
+      continue;
+    }
+    if (k === 'constructor') {
+      continue;
+    }
+    if ((includeFuncNames != null ? includeFuncNames.indexOf(k) : void 0) < 0) {
+      continue;
+    }
+    if ((excludeFuncNames != null ? excludeFuncNames.indexOf(k) : void 0) > -1) {
+      continue;
+    }
+    results.push((function(k, v) {
+      return clazz.prototype[k] = function(options) {
+        var onError, optionsCopy, promise;
+        if (options == null) {
+          options = {};
+        }
+        if ((options.onSuccess != null) || (options.onError != null) || (typeof options) !== 'object') {
+          if ((typeof options) === 'object' && isFunction(options.onError)) {
+            onError = options.onError;
+            options.onError = function(err) {
+              err = Utils.createError(err);
+              debug(k + ":" + v, err);
+              return onError(err);
+            };
+          }
+          return v.apply(this, arguments);
+        }
+        if (arguments.length > 1) {
+          return v.apply(this, arguments);
+        }
+        optionsCopy = chatManagerUtil.getPromiseOption(options);
+        promise = new Promise(function(resolve, reject) {
+          optionsCopy.onSuccess = function(result) {
+            return resolve(result);
+          };
+          return optionsCopy.onError = function(err) {
+            err = Utils.createError(err);
+            debug(k + ":" + v, err);
+            return reject(err);
+          };
+        });
+        v.call(this, optionsCopy);
+        return promise;
+      };
+    })(k, v));
+  }
+  return results;
+};
+
+module.exports = Promise;
+
+
+
+},{"../chat/chatManagerUtil":10,"../utils":31,"debug":38}],33:[function(require,module,exports){
 'use strict';
 var BrowserRequester, NodeRequester, Utils, browserInfo, debug, formatGetUrl, jsonpRequest, needJSONP, request, xmlHttpRequest;
 
@@ -1273,6 +5705,11 @@ formatGetUrl = function(url, data) {
   }
   return url += queryPairs.join('&');
 };
+
+
+/*
+  @nodoc
+ */
 
 BrowserRequester = (function() {
   function BrowserRequester() {}
@@ -1334,17 +5771,26 @@ BrowserRequester = (function() {
 
 })();
 
+
+/*
+  @nodoc
+ */
+
 NodeRequester = (function() {
   function NodeRequester() {}
 
   NodeRequester.get = function(url, data, callback) {
-    return request.get(url).query(data).end(callback);
+    return request.get(url).query(data).end(function(err, data) {
+      return callback(err, data != null ? data.body : void 0);
+    });
   };
 
   NodeRequester.getWithJSONPFallback = NodeRequester.get;
 
   NodeRequester.post = function(url, data, callback) {
-    return request.post(url).send(data).end(callback);
+    return request.post(url).send(data).end(function(err, data) {
+      return callback(err, data != null ? data.body : void 0);
+    });
   };
 
   NodeRequester.postWithJSONPFallback = NodeRequester.post;
@@ -1357,34 +5803,11 @@ module.exports = typeof window !== "undefined" && window !== null ? BrowserReque
 
 
 
-},{"../index":14,"./jsonpRequest":16,"./xmlHttpRequest":17,"debug":19,"superagent":51}],16:[function(require,module,exports){
+},{"../index":31,"./jsonpRequest":34,"./xmlHttpRequest":36,"debug":38,"superagent":72}],34:[function(require,module,exports){
 'use strict';
-var getCallbackFromUrl, loadScript;
+var getCallbackFromUrl, loadJS;
 
-loadScript = function(url, callback) {
-  var done, insertAt, jsonpTimer, script;
-  done = false;
-  script = document.createElement('script');
-  script.type = 'text/javascript';
-  script.src = url;
-  script.async = true;
-  jsonpTimer = setTimeout(function() {
-    return callback(new Error('jsonp request 10s timeout'));
-  }, 10000);
-  script.onload = script.onreadystatechange = function() {
-    if (!done && (!this.readyState || this.readyState === 'loaded' || this.readyState === 'complete')) {
-      done = true;
-      script.onload = script.onreadystatechange = null;
-      if (script && script.parentNode) {
-        script.parentNode.removeChild(script);
-      }
-      clearTimeout(jsonpTimer);
-      return callback();
-    }
-  };
-  insertAt = document.getElementsByTagName('script')[0];
-  return insertAt.parentNode.insertBefore(script, insertAt);
-};
+loadJS = require('./loadJS.coffee');
 
 getCallbackFromUrl = function(url) {
   var callbackRegExp, matches;
@@ -1397,11 +5820,11 @@ getCallbackFromUrl = function(url) {
 };
 
 module.exports.get = function(url, callback) {
-  var callbackName, data, err, originalCallback;
+  var callbackName, data, err, error, originalCallback;
   try {
     callbackName = getCallbackFromUrl(url);
-  } catch (_error) {
-    err = _error;
+  } catch (error) {
+    err = error;
     return callback(err);
   }
   data = void 0;
@@ -1409,17 +5832,20 @@ module.exports.get = function(url, callback) {
   window[callbackName] = function(jsonpData) {
     return data = jsonpData;
   };
-  return loadScript(url, function(err) {
-    if (!data) {
-      err = new Error("JSONP requeset need a JSON response");
+  return loadJS.load(url).then(function() {
+    return callback(null, data);
+  })["catch"](function(err) {
+    var error1;
+    if (!err && !data) {
+      err = new Error('JSONP requeset can not get a JSON response');
     }
     if (originalCallback) {
       window[callbackName] = originalCallback;
     } else {
       try {
         delete window[callbackName];
-      } catch (_error) {
-        err = _error;
+      } catch (error1) {
+        err = error1;
         window[callbackName] = void 0;
       }
     }
@@ -1429,7 +5855,175 @@ module.exports.get = function(url, callback) {
 
 
 
-},{}],17:[function(require,module,exports){
+},{"./loadJS.coffee":35}],35:[function(require,module,exports){
+'use strict';
+var LoadJS, Promise, debug, loadJS;
+
+Promise = require('../promise');
+
+debug = require('debug')('engine:loadJS');
+
+
+/*
+  @nodoc
+ */
+
+LoadJS = (function() {
+  function LoadJS() {
+    this.loaded = {};
+  }
+
+  LoadJS.prototype.load = function() {
+    var _arg, arg, i, len, promiseBlock;
+    if (arguments.length === 0) {
+      return Promise.reject('arguments error');
+    }
+    promiseBlock = [];
+    for (i = 0, len = arguments.length; i < len; i++) {
+      arg = arguments[i];
+      if (arg instanceof Array) {
+        promiseBlock = (function() {
+          var j, len1, results;
+          results = [];
+          for (j = 0, len1 = arg.length; j < len1; j++) {
+            _arg = arg[j];
+            results.push(this._load(_arg));
+          }
+          return results;
+        }).call(this);
+      } else {
+        promiseBlock.push(this._load(arg));
+      }
+    }
+    return Promise.all(promiseBlock);
+  };
+
+  LoadJS.prototype._load = function(url) {
+    var promise, self;
+    self = this;
+    return promise = new Promise(function(resolve, reject) {
+      var head, script, timeoutTimer, timer;
+      if (self.loaded[url] === 'loaded') {
+        return resolve('loaded');
+      } else if (self.loaded[url] === 'loading') {
+        timer = setInterval(function() {
+          if (self.loaded[url] === 'loaded') {
+            if (timer != null) {
+              clearInterval(timer);
+            }
+            return resolve('loaded');
+          }
+        }, 2000);
+        return;
+      }
+      self.loaded[url] = 'loading';
+      head = document.getElementsByTagName('head')[0];
+      script = document.createElement('script');
+      script.type = 'text/javascript';
+      script.src = url;
+      script.async = true;
+      timeoutTimer = setTimeout(function() {
+        return reject('请求超时');
+      }, 10000);
+      script.onreadystatechange = script.onload = function(result) {
+        self.loaded[url] = 'loaded';
+        if (timeoutTimer != null) {
+          clearTimeout(timeoutTimer);
+        }
+        return resolve(url);
+      };
+      script.onerror = function(err) {
+        self.loaded[url] = 'error';
+        debug('loadJS error', url, err);
+        if (timeoutTimer != null) {
+          clearTimeout(timeoutTimer);
+        }
+        return reject(new Error(err));
+      };
+      return head.appendChild(script);
+    });
+  };
+
+  LoadJS.prototype.getExtensionJS = function(extension) {
+    var exJS, extensionJS, i, j, k, l, len, len1, len2, path, pathMapping, ref, ref1, v;
+    pathMapping = {
+      'enableCache': ['indexeddbshim.min.js', 'db.min.js'],
+      'enableMediaMessage': ['plupload.min.js', 'qiniu.min.js', 'RecordRTC.js']
+    };
+    extensionJS = [];
+    if (Object.prototype.toString.call(extension) === '[object Array]') {
+      for (i = 0, len = extension.length; i < len; i++) {
+        exJS = extension[i];
+        if (pathMapping[exJS]) {
+          ref = pathMapping[exJS];
+          for (j = 0, len1 = ref.length; j < len1; j++) {
+            path = ref[j];
+            extensionJS.push(path);
+          }
+        }
+      }
+    } else {
+      for (k in extension) {
+        v = extension[k];
+        if ('function' !== typeof v && v) {
+          ref1 = pathMapping[k];
+          for (l = 0, len2 = ref1.length; l < len2; l++) {
+            path = ref1[l];
+            extensionJS.push(path);
+          }
+        }
+      }
+    }
+    return extensionJS;
+  };
+
+  LoadJS.prototype.getExtensionJSPaths = function(extensionJSPath, basePath) {
+    var regExp;
+    regExp = new RegExp('^[A-Za-z]+://[A-Za-z0-9-_]+\\.[A-Za-z0-9-_%&\?\/.=]+(js)$');
+    if (regExp.test(extensionJSPath)) {
+      return extensionJSPath;
+    }
+    this.basePath = basePath || '/';
+    if (this.basePath == null) {
+      this.throwError('If you want to use the extension, You must specify the base path!');
+    }
+    basePath = this.basePath.charAt(this.basePath.length - 1) === '/' ? this.basePath + "libs/" : this.basePath + "/libs/";
+    return "" + basePath + extensionJSPath;
+  };
+
+  LoadJS.prototype.requireExtensionJSPaths = function(name, basePath) {
+    var extensionJSPath, extensionJSPaths, i, len, ref;
+    extensionJSPaths = [];
+    ref = this.getExtensionJS([name]);
+    for (i = 0, len = ref.length; i < len; i++) {
+      extensionJSPath = ref[i];
+      extensionJSPaths.push(this.getExtensionJSPaths(extensionJSPath));
+    }
+    return extensionJSPaths;
+  };
+
+  LoadJS.prototype.require = function(name, basePath) {
+    var extensionJSPath, extensionJSPaths, i, len, ref;
+    extensionJSPaths = [];
+    ref = this.getExtensionJS([name]);
+    for (i = 0, len = ref.length; i < len; i++) {
+      extensionJSPath = ref[i];
+      extensionJSPaths.push(this.getExtensionJSPaths(extensionJSPath, basePath));
+    }
+    return this.load(extensionJSPaths);
+  };
+
+  return LoadJS;
+
+})();
+
+loadJS = new LoadJS();
+
+module.exports = loadJS;
+
+
+
+},{"../promise":32,"debug":38}],36:[function(require,module,exports){
 'use strict';
 var getXHR, request;
 
@@ -1438,11 +6032,11 @@ getXHR = function() {
     if (window.XMLHttpRequest) {
       return new XMLHttpRequest();
     }
-  } catch (_error) {}
+  } catch (undefined) {}
 };
 
 request = function(method, url, headers, data, cb) {
-  var err, name, value, xhr;
+  var err, error, name, value, xhr;
   if (headers == null) {
     headers = {};
   }
@@ -1453,7 +6047,7 @@ request = function(method, url, headers, data, cb) {
     xhr.setRequestHeader(name, value);
   }
   xhr.onload = function() {
-    var err, responseJSON;
+    var err, error, responseJSON;
     if (xhr.readyState !== 4) {
       return;
     }
@@ -1462,8 +6056,8 @@ request = function(method, url, headers, data, cb) {
     }
     try {
       responseJSON = JSON.parse(xhr.responseText);
-    } catch (_error) {
-      err = _error;
+    } catch (error) {
+      err = error;
       return cb(err);
     }
     return cb(null, responseJSON);
@@ -1473,8 +6067,8 @@ request = function(method, url, headers, data, cb) {
   };
   try {
     return xhr.send(data);
-  } catch (_error) {
-    err = _error;
+  } catch (error) {
+    err = error;
     return cb(err);
   }
 };
@@ -1494,7 +6088,7 @@ exports.post = function(url, data, cb) {
 
 
 
-},{}],18:[function(require,module,exports){
+},{}],37:[function(require,module,exports){
 (function (Buffer){
 'use strict';
 
@@ -1502,7 +6096,7 @@ exports.post = function(url, data, cb) {
  * Common protocol related code shared between server and js clent.
  */
 var Protocol,
-  __indexOf = [].indexOf || function(item) { for (var i = 0, l = this.length; i < l; i++) { if (i in this && this[i] === item) return i; } return -1; };
+  indexOf = [].indexOf || function(item) { for (var i = 0, l = this.length; i < l; i++) { if (i in this && this[i] === item) return i; } return -1; };
 
 Protocol = (function() {
   function Protocol() {}
@@ -1586,7 +6180,7 @@ Protocol = (function() {
       code: 4101,
       message: 'Server is under maintenance, please try again later.',
       reconnectStrategy: 'backoff',
-      reconnectIn: 10 * 1000,
+      reconnectIn: 30 * 1000,
       reconnectInMax: 5 * 60 * 1000
     },
     serverOverCapacity: {
@@ -1633,6 +6227,14 @@ Protocol = (function() {
     permissionDenied: {
       code: 4505,
       message: 'Permission denied.'
+    },
+    fileOperationFailed: {
+      code: 4506,
+      message: 'File operation failed.'
+    },
+    requestTimeout: {
+      code: 4507,
+      message: 'Request timed out.'
     }
   };
 
@@ -1658,11 +6260,11 @@ Protocol = (function() {
   };
 
   Protocol.decodeEvent = function(event) {
-    var err;
+    var err, error;
     try {
       event = JSON.parse(event);
-    } catch (_error) {
-      err = _error;
+    } catch (error) {
+      err = error;
       this._throwError(this.connErrors.eventInvalid);
     }
     this._validateEvent(event);
@@ -1698,9 +6300,9 @@ Protocol = (function() {
   };
 
   Protocol.validatePresenceChannelUser = function(existingUserIds, user) {
-    var uniqueUserIds, userInfoSize, _ref;
+    var ref, uniqueUserIds, userInfoSize;
     uniqueUserIds = _.unique(existingUserIds);
-    if (uniqueUserIds.length >= this.presenceChannelUserMaxCount && (_ref = user.userId, __indexOf.call(uniqueUserIds, _ref) < 0)) {
+    if (uniqueUserIds.length >= this.presenceChannelUserMaxCount && (ref = user.userId, indexOf.call(uniqueUserIds, ref) < 0)) {
       this._throwError(new Error('Exceeds max presence channel user count.'));
     }
     userInfoSize = Buffer.byteLength(JSON.stringify(user.userInfo), 'utf8');
@@ -1718,7 +6320,7 @@ module.exports = Protocol;
 
 
 }).call(this,require("buffer").Buffer)
-},{"buffer":52}],19:[function(require,module,exports){
+},{"buffer":73}],38:[function(require,module,exports){
 
 /**
  * This is the web browser implementation of `debug()`.
@@ -1853,7 +6455,7 @@ function load() {
 
 exports.enable(load());
 
-},{"./debug":20}],20:[function(require,module,exports){
+},{"./debug":39}],39:[function(require,module,exports){
 
 /**
  * This is the common logic for both the Node.js and web browser
@@ -2048,7 +6650,7 @@ function coerce(val) {
   return val;
 }
 
-},{"ms":21}],21:[function(require,module,exports){
+},{"ms":40}],40:[function(require,module,exports){
 /**
  * Helpers.
  */
@@ -2161,11 +6763,11 @@ function plural(ms, n, name) {
   return Math.ceil(ms / n) + ' ' + name + 's';
 }
 
-},{}],22:[function(require,module,exports){
+},{}],41:[function(require,module,exports){
 
 module.exports =  require('./lib/');
 
-},{"./lib/":23}],23:[function(require,module,exports){
+},{"./lib/":42}],42:[function(require,module,exports){
 
 module.exports = require('./socket');
 
@@ -2177,7 +6779,7 @@ module.exports = require('./socket');
  */
 module.exports.parser = require('engine.io-parser');
 
-},{"./socket":24,"engine.io-parser":37}],24:[function(require,module,exports){
+},{"./socket":43,"engine.io-parser":56}],43:[function(require,module,exports){
 (function (global){
 /**
  * Module dependencies.
@@ -2238,7 +6840,12 @@ function Socket(uri, opts){
   if (opts.host) {
     var pieces = opts.host.split(':');
     opts.hostname = pieces.shift();
-    if (pieces.length) opts.port = pieces.pop();
+    if (pieces.length) {
+      opts.port = pieces.pop();
+    } else if (!opts.port) {
+      // if no port is specified manually, use the protocol default
+      opts.port = this.secure ? '443' : '80';
+    }
   }
 
   this.agent = opts.agent || false;
@@ -2263,9 +6870,19 @@ function Socket(uri, opts){
   this.callbackBuffer = [];
   this.policyPort = opts.policyPort || 843;
   this.rememberUpgrade = opts.rememberUpgrade || false;
-  this.open();
   this.binaryType = null;
   this.onlyBinaryUpgrades = opts.onlyBinaryUpgrades;
+
+  // SSL options for Node.js client
+  this.pfx = opts.pfx || null;
+  this.key = opts.key || null;
+  this.passphrase = opts.passphrase || null;
+  this.cert = opts.cert || null;
+  this.ca = opts.ca || null;
+  this.ciphers = opts.ciphers || null;
+  this.rejectUnauthorized = opts.rejectUnauthorized || null;
+
+  this.open();
 }
 
 Socket.priorWebsocketSuccess = false;
@@ -2329,7 +6946,14 @@ Socket.prototype.createTransport = function (name) {
     timestampRequests: this.timestampRequests,
     timestampParam: this.timestampParam,
     policyPort: this.policyPort,
-    socket: this
+    socket: this,
+    pfx: this.pfx,
+    key: this.key,
+    passphrase: this.passphrase,
+    cert: this.cert,
+    ca: this.ca,
+    ciphers: this.ciphers,
+    rejectUnauthorized: this.rejectUnauthorized
   });
 
   return transport;
@@ -2864,7 +7488,7 @@ Socket.prototype.filterUpgrades = function (upgrades) {
 };
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"./transport":25,"./transports":26,"component-emitter":32,"debug":34,"engine.io-parser":37,"indexof":46,"parsejson":47,"parseqs":48,"parseuri":49}],25:[function(require,module,exports){
+},{"./transport":44,"./transports":45,"component-emitter":51,"debug":53,"engine.io-parser":56,"indexof":67,"parsejson":68,"parseqs":69,"parseuri":70}],44:[function(require,module,exports){
 /**
  * Module dependencies.
  */
@@ -2897,6 +7521,15 @@ function Transport (opts) {
   this.agent = opts.agent || false;
   this.socket = opts.socket;
   this.enablesXDR = opts.enablesXDR;
+
+  // SSL options for Node.js client
+  this.pfx = opts.pfx;
+  this.key = opts.key;
+  this.passphrase = opts.passphrase;
+  this.cert = opts.cert;
+  this.ca = opts.ca;
+  this.ciphers = opts.ciphers;
+  this.rejectUnauthorized = opts.rejectUnauthorized;
 }
 
 /**
@@ -3016,7 +7649,7 @@ Transport.prototype.onClose = function () {
   this.emit('close');
 };
 
-},{"component-emitter":32,"engine.io-parser":37}],26:[function(require,module,exports){
+},{"component-emitter":51,"engine.io-parser":56}],45:[function(require,module,exports){
 (function (global){
 /**
  * Module dependencies
@@ -3073,7 +7706,7 @@ function polling(opts){
 }
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"./polling-jsonp":27,"./polling-xhr":28,"./websocket":30,"xmlhttprequest":31}],27:[function(require,module,exports){
+},{"./polling-jsonp":46,"./polling-xhr":47,"./websocket":49,"xmlhttprequest":50}],46:[function(require,module,exports){
 (function (global){
 
 /**
@@ -3310,7 +7943,7 @@ JSONPPolling.prototype.doWrite = function (data, fn) {
 };
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"./polling":29,"component-inherit":33}],28:[function(require,module,exports){
+},{"./polling":48,"component-inherit":52}],47:[function(require,module,exports){
 (function (global){
 /**
  * Module requirements.
@@ -3387,6 +8020,16 @@ XHR.prototype.request = function(opts){
   opts.agent = this.agent || false;
   opts.supportsBinary = this.supportsBinary;
   opts.enablesXDR = this.enablesXDR;
+
+  // SSL options for Node.js client
+  opts.pfx = this.pfx;
+  opts.key = this.key;
+  opts.passphrase = this.passphrase;
+  opts.cert = this.cert;
+  opts.ca = this.ca;
+  opts.ciphers = this.ciphers;
+  opts.rejectUnauthorized = this.rejectUnauthorized;
+
   return new Request(opts);
 };
 
@@ -3446,6 +8089,16 @@ function Request(opts){
   this.isBinary = opts.isBinary;
   this.supportsBinary = opts.supportsBinary;
   this.enablesXDR = opts.enablesXDR;
+
+  // SSL options for Node.js client
+  this.pfx = opts.pfx;
+  this.key = opts.key;
+  this.passphrase = opts.passphrase;
+  this.cert = opts.cert;
+  this.ca = opts.ca;
+  this.ciphers = opts.ciphers;
+  this.rejectUnauthorized = opts.rejectUnauthorized;
+
   this.create();
 }
 
@@ -3462,7 +8115,18 @@ Emitter(Request.prototype);
  */
 
 Request.prototype.create = function(){
-  var xhr = this.xhr = new XMLHttpRequest({ agent: this.agent, xdomain: this.xd, xscheme: this.xs, enablesXDR: this.enablesXDR });
+  var opts = { agent: this.agent, xdomain: this.xd, xscheme: this.xs, enablesXDR: this.enablesXDR };
+
+  // SSL options for Node.js client
+  opts.pfx = this.pfx;
+  opts.key = this.key;
+  opts.passphrase = this.passphrase;
+  opts.cert = this.cert;
+  opts.ca = this.ca;
+  opts.ciphers = this.ciphers;
+  opts.rejectUnauthorized = this.rejectUnauthorized;
+
+  var xhr = this.xhr = new XMLHttpRequest(opts);
   var self = this;
 
   try {
@@ -3559,7 +8223,7 @@ Request.prototype.onData = function(data){
 
 Request.prototype.onError = function(err){
   this.emit('error', err);
-  this.cleanup();
+  this.cleanup(true);
 };
 
 /**
@@ -3568,7 +8232,7 @@ Request.prototype.onError = function(err){
  * @api private
  */
 
-Request.prototype.cleanup = function(){
+Request.prototype.cleanup = function(fromError){
   if ('undefined' == typeof this.xhr || null === this.xhr) {
     return;
   }
@@ -3579,9 +8243,11 @@ Request.prototype.cleanup = function(){
     this.xhr.onreadystatechange = empty;
   }
 
-  try {
-    this.xhr.abort();
-  } catch(e) {}
+  if (fromError) {
+    try {
+      this.xhr.abort();
+    } catch(e) {}
+  }
 
   if (global.document) {
     delete Request.requests[this.index];
@@ -3665,7 +8331,7 @@ function unloadHandler() {
 }
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"./polling":29,"component-emitter":32,"component-inherit":33,"debug":34,"xmlhttprequest":31}],29:[function(require,module,exports){
+},{"./polling":48,"component-emitter":51,"component-inherit":52,"debug":53,"xmlhttprequest":50}],48:[function(require,module,exports){
 /**
  * Module dependencies.
  */
@@ -3912,7 +8578,7 @@ Polling.prototype.uri = function(){
   return schema + '://' + this.hostname + port + this.path + query;
 };
 
-},{"../transport":25,"component-inherit":33,"debug":34,"engine.io-parser":37,"parseqs":48,"xmlhttprequest":31}],30:[function(require,module,exports){
+},{"../transport":44,"component-inherit":52,"debug":53,"engine.io-parser":56,"parseqs":69,"xmlhttprequest":50}],49:[function(require,module,exports){
 /**
  * Module dependencies.
  */
@@ -3988,6 +8654,15 @@ WS.prototype.doOpen = function(){
   var uri = this.uri();
   var protocols = void(0);
   var opts = { agent: this.agent };
+
+  // SSL options for Node.js client
+  opts.pfx = this.pfx;
+  opts.key = this.key;
+  opts.passphrase = this.passphrase;
+  opts.cert = this.cert;
+  opts.ca = this.ca;
+  opts.ciphers = this.ciphers;
+  opts.rejectUnauthorized = this.rejectUnauthorized;
 
   this.ws = new WebSocket(uri, protocols, opts);
 
@@ -4143,7 +8818,7 @@ WS.prototype.check = function(){
   return !!WebSocket && !('__initialize' in WebSocket && this.name === WS.prototype.name);
 };
 
-},{"../transport":25,"component-inherit":33,"debug":34,"engine.io-parser":37,"parseqs":48,"ws":50}],31:[function(require,module,exports){
+},{"../transport":44,"component-inherit":52,"debug":53,"engine.io-parser":56,"parseqs":69,"ws":71}],50:[function(require,module,exports){
 // browser shim for xmlhttprequest module
 var hasCORS = require('has-cors');
 
@@ -4181,7 +8856,7 @@ module.exports = function(opts) {
   }
 }
 
-},{"has-cors":44}],32:[function(require,module,exports){
+},{"has-cors":65}],51:[function(require,module,exports){
 
 /**
  * Expose `Emitter`.
@@ -4347,7 +9022,7 @@ Emitter.prototype.hasListeners = function(event){
   return !! this.listeners(event).length;
 };
 
-},{}],33:[function(require,module,exports){
+},{}],52:[function(require,module,exports){
 
 module.exports = function(a, b){
   var fn = function(){};
@@ -4355,7 +9030,7 @@ module.exports = function(a, b){
   a.prototype = new fn;
   a.prototype.constructor = a;
 };
-},{}],34:[function(require,module,exports){
+},{}],53:[function(require,module,exports){
 
 /**
  * This is the web browser implementation of `debug()`.
@@ -4504,7 +9179,7 @@ function load() {
 
 exports.enable(load());
 
-},{"./debug":35}],35:[function(require,module,exports){
+},{"./debug":54}],54:[function(require,module,exports){
 
 /**
  * This is the common logic for both the Node.js and web browser
@@ -4703,15 +9378,16 @@ function coerce(val) {
   return val;
 }
 
-},{"ms":36}],36:[function(require,module,exports){
-module.exports=require(21)
-},{"/srv/newtuisongbao_server/node_modules/debug/node_modules/ms/index.js":21}],37:[function(require,module,exports){
+},{"ms":55}],55:[function(require,module,exports){
+module.exports=require(40)
+},{"/root/wp/server/node_modules/debug/node_modules/ms/index.js":40}],56:[function(require,module,exports){
 (function (global){
 /**
  * Module dependencies.
  */
 
 var keys = require('./keys');
+var hasBinary = require('has-binary');
 var sliceBuffer = require('arraybuffer.slice');
 var base64encoder = require('base64-arraybuffer');
 var after = require('after');
@@ -4725,6 +9401,20 @@ var utf8 = require('utf8');
  */
 
 var isAndroid = navigator.userAgent.match(/Android/i);
+
+/**
+ * Check if we are running in PhantomJS.
+ * Uploading a Blob with PhantomJS does not work correctly, as reported here:
+ * https://github.com/ariya/phantomjs/issues/11395
+ * @type boolean
+ */
+var isPhantomJS = /PhantomJS/i.test(navigator.userAgent);
+
+/**
+ * When true, avoids using Blobs to encode payloads.
+ * @type boolean
+ */
+var dontSendBlobs = isAndroid || isPhantomJS;
 
 /**
  * Current protocol version.
@@ -4797,6 +9487,11 @@ exports.encodePacket = function (packet, supportsBinary, utf8encode, callback) {
     return encodeBlob(packet, supportsBinary, callback);
   }
 
+  // might be an object with { base64: true, data: dataAsBase64String }
+  if (data && data.base64) {
+    return encodeBase64Object(packet, callback);
+  }
+
   // Sending data as a utf-8 string
   var encoded = packets[packet.type];
 
@@ -4808,6 +9503,12 @@ exports.encodePacket = function (packet, supportsBinary, utf8encode, callback) {
   return callback('' + encoded);
 
 };
+
+function encodeBase64Object(packet, callback) {
+  // packet data is an object { base64: true, data: dataAsBase64String }
+  var message = 'b' + exports.packets[packet.type] + packet.data.data;
+  return callback(message);
+}
 
 /**
  * Encode packet helpers for binary types
@@ -4848,7 +9549,7 @@ function encodeBlob(packet, supportsBinary, callback) {
     return exports.encodeBase64Packet(packet, callback);
   }
 
-  if (isAndroid) {
+  if (dontSendBlobs) {
     return encodeBlobAsArrayBuffer(packet, supportsBinary, callback);
   }
 
@@ -4980,8 +9681,10 @@ exports.encodePayload = function (packets, supportsBinary, callback) {
     supportsBinary = null;
   }
 
-  if (supportsBinary) {
-    if (Blob && !isAndroid) {
+  var isBinary = hasBinary(packets);
+
+  if (supportsBinary && isBinary) {
+    if (Blob && !dontSendBlobs) {
       return exports.encodePayloadAsBlob(packets, callback);
     }
 
@@ -4997,7 +9700,7 @@ exports.encodePayload = function (packets, supportsBinary, callback) {
   }
 
   function encodeOne(packet, doneCallback) {
-    exports.encodePacket(packet, supportsBinary, true, function(message) {
+    exports.encodePacket(packet, !isBinary ? false : supportsBinary, true, function(message) {
       doneCallback(null, setLengthHeader(message));
     });
   }
@@ -5275,7 +9978,7 @@ exports.decodePayloadAsBinary = function (data, binaryType, callback) {
 };
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"./keys":38,"after":39,"arraybuffer.slice":40,"base64-arraybuffer":41,"blob":42,"utf8":43}],38:[function(require,module,exports){
+},{"./keys":57,"after":58,"arraybuffer.slice":59,"base64-arraybuffer":60,"blob":61,"has-binary":62,"utf8":64}],57:[function(require,module,exports){
 
 /**
  * Gets the keys for an object.
@@ -5296,7 +9999,7 @@ module.exports = Object.keys || function keys (obj){
   return arr;
 };
 
-},{}],39:[function(require,module,exports){
+},{}],58:[function(require,module,exports){
 module.exports = after
 
 function after(count, callback, err_cb) {
@@ -5326,7 +10029,7 @@ function after(count, callback, err_cb) {
 
 function noop() {}
 
-},{}],40:[function(require,module,exports){
+},{}],59:[function(require,module,exports){
 /**
  * An abstraction for slicing an arraybuffer even when
  * ArrayBuffer.prototype.slice is not supported
@@ -5357,7 +10060,7 @@ module.exports = function(arraybuffer, start, end) {
   return result.buffer;
 };
 
-},{}],41:[function(require,module,exports){
+},{}],60:[function(require,module,exports){
 /*
  * base64-arraybuffer
  * https://github.com/niklasvh/base64-arraybuffer
@@ -5418,7 +10121,7 @@ module.exports = function(arraybuffer, start, end) {
   };
 })("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/");
 
-},{}],42:[function(require,module,exports){
+},{}],61:[function(require,module,exports){
 (function (global){
 /**
  * Create a blob builder even when vendor prefixes exist
@@ -5435,8 +10138,22 @@ var BlobBuilder = global.BlobBuilder
 
 var blobSupported = (function() {
   try {
-    var b = new Blob(['hi']);
-    return b.size == 2;
+    var a = new Blob(['hi']);
+    return a.size === 2;
+  } catch(e) {
+    return false;
+  }
+})();
+
+/**
+ * Check if Blob constructor supports ArrayBufferViews
+ * Fails in Safari 6, so we need to map to ArrayBuffers there.
+ */
+
+var blobSupportsArrayBufferView = blobSupported && (function() {
+  try {
+    var b = new Blob([new Uint8Array([1,2])]);
+    return b.size === 2;
   } catch(e) {
     return false;
   }
@@ -5450,19 +10167,52 @@ var blobBuilderSupported = BlobBuilder
   && BlobBuilder.prototype.append
   && BlobBuilder.prototype.getBlob;
 
+/**
+ * Helper function that maps ArrayBufferViews to ArrayBuffers
+ * Used by BlobBuilder constructor and old browsers that didn't
+ * support it in the Blob constructor.
+ */
+
+function mapArrayBufferViews(ary) {
+  for (var i = 0; i < ary.length; i++) {
+    var chunk = ary[i];
+    if (chunk.buffer instanceof ArrayBuffer) {
+      var buf = chunk.buffer;
+
+      // if this is a subarray, make a copy so we only
+      // include the subarray region from the underlying buffer
+      if (chunk.byteLength !== buf.byteLength) {
+        var copy = new Uint8Array(chunk.byteLength);
+        copy.set(new Uint8Array(buf, chunk.byteOffset, chunk.byteLength));
+        buf = copy.buffer;
+      }
+
+      ary[i] = buf;
+    }
+  }
+}
+
 function BlobBuilderConstructor(ary, options) {
   options = options || {};
 
   var bb = new BlobBuilder();
+  mapArrayBufferViews(ary);
+
   for (var i = 0; i < ary.length; i++) {
     bb.append(ary[i]);
   }
+
   return (options.type) ? bb.getBlob(options.type) : bb.getBlob();
+};
+
+function BlobConstructor(ary, options) {
+  mapArrayBufferViews(ary);
+  return new Blob(ary, options || {});
 };
 
 module.exports = (function() {
   if (blobSupported) {
-    return global.Blob;
+    return blobSupportsArrayBufferView ? global.Blob : BlobConstructor;
   } else if (blobBuilderSupported) {
     return BlobBuilderConstructor;
   } else {
@@ -5471,9 +10221,76 @@ module.exports = (function() {
 })();
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{}],43:[function(require,module,exports){
+},{}],62:[function(require,module,exports){
 (function (global){
-/*! http://mths.be/utf8js v2.0.0 by @mathias */
+
+/*
+ * Module requirements.
+ */
+
+var isArray = require('isarray');
+
+/**
+ * Module exports.
+ */
+
+module.exports = hasBinary;
+
+/**
+ * Checks for binary data.
+ *
+ * Right now only Buffer and ArrayBuffer are supported..
+ *
+ * @param {Object} anything
+ * @api public
+ */
+
+function hasBinary(data) {
+
+  function _hasBinary(obj) {
+    if (!obj) return false;
+
+    if ( (global.Buffer && global.Buffer.isBuffer(obj)) ||
+         (global.ArrayBuffer && obj instanceof ArrayBuffer) ||
+         (global.Blob && obj instanceof Blob) ||
+         (global.File && obj instanceof File)
+        ) {
+      return true;
+    }
+
+    if (isArray(obj)) {
+      for (var i = 0; i < obj.length; i++) {
+          if (_hasBinary(obj[i])) {
+              return true;
+          }
+      }
+    } else if (obj && 'object' == typeof obj) {
+      if (obj.toJSON) {
+        obj = obj.toJSON();
+      }
+
+      for (var key in obj) {
+        if (Object.prototype.hasOwnProperty.call(obj, key) && _hasBinary(obj[key])) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  return _hasBinary(data);
+}
+
+}).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
+},{"isarray":63}],63:[function(require,module,exports){
+module.exports = Array.isArray || function (arr) {
+  return Object.prototype.toString.call(arr) == '[object Array]';
+};
+
+},{}],64:[function(require,module,exports){
+(function (global){
+/*! https://mths.be/utf8js v2.0.0 by @mathias */
 ;(function(root) {
 
 	// Detect free variables `exports`
@@ -5494,7 +10311,7 @@ module.exports = (function() {
 
 	var stringFromCharCode = String.fromCharCode;
 
-	// Taken from http://mths.be/punycode
+	// Taken from https://mths.be/punycode
 	function ucs2decode(string) {
 		var output = [];
 		var counter = 0;
@@ -5521,7 +10338,7 @@ module.exports = (function() {
 		return output;
 	}
 
-	// Taken from http://mths.be/punycode
+	// Taken from https://mths.be/punycode
 	function ucs2encode(array) {
 		var length = array.length;
 		var index = -1;
@@ -5539,6 +10356,14 @@ module.exports = (function() {
 		return output;
 	}
 
+	function checkScalarValue(codePoint) {
+		if (codePoint >= 0xD800 && codePoint <= 0xDFFF) {
+			throw Error(
+				'Lone surrogate U+' + codePoint.toString(16).toUpperCase() +
+				' is not a scalar value'
+			);
+		}
+	}
 	/*--------------------------------------------------------------------------*/
 
 	function createByte(codePoint, shift) {
@@ -5554,6 +10379,7 @@ module.exports = (function() {
 			symbol = stringFromCharCode(((codePoint >> 6) & 0x1F) | 0xC0);
 		}
 		else if ((codePoint & 0xFFFF0000) == 0) { // 3-byte sequence
+			checkScalarValue(codePoint);
 			symbol = stringFromCharCode(((codePoint >> 12) & 0x0F) | 0xE0);
 			symbol += createByte(codePoint, 6);
 		}
@@ -5568,11 +10394,6 @@ module.exports = (function() {
 
 	function utf8encode(string) {
 		var codePoints = ucs2decode(string);
-
-		// console.log(JSON.stringify(codePoints.map(function(x) {
-		// 	return 'U+' + x.toString(16).toUpperCase();
-		// })));
-
 		var length = codePoints.length;
 		var index = -1;
 		var codePoint;
@@ -5643,6 +10464,7 @@ module.exports = (function() {
 			byte3 = readContinuationByte();
 			codePoint = ((byte1 & 0x0F) << 12) | (byte2 << 6) | byte3;
 			if (codePoint >= 0x0800) {
+				checkScalarValue(codePoint);
 				return codePoint;
 			} else {
 				throw Error('Invalid continuation byte');
@@ -5689,32 +10511,32 @@ module.exports = (function() {
 
 	// Some AMD build optimizers, like r.js, check for specific condition patterns
 	// like the following:
-	if (
-		typeof define == 'function' &&
-		typeof define.amd == 'object' &&
-		define.amd
-	) {
-		define(function() {
-			return utf8;
-		});
-	}	else if (freeExports && !freeExports.nodeType) {
-		if (freeModule) { // in Node.js or RingoJS v0.8.0+
-			freeModule.exports = utf8;
-		} else { // in Narwhal or RingoJS v0.7.0-
-			var object = {};
-			var hasOwnProperty = object.hasOwnProperty;
-			for (var key in utf8) {
-				hasOwnProperty.call(utf8, key) && (freeExports[key] = utf8[key]);
-			}
-		}
-	} else { // in Rhino or a web browser
-		root.utf8 = utf8;
-	}
+  if (freeExports && !freeExports.nodeType) {
+    if (freeModule) { // in Node.js or RingoJS v0.8.0+
+      freeModule.exports = utf8;
+    } else { // in Narwhal or RingoJS v0.7.0-
+      var object = {};
+      var hasOwnProperty = object.hasOwnProperty;
+      for (var key in utf8) {
+        hasOwnProperty.call(utf8, key) && (freeExports[key] = utf8[key]);
+      }
+    }
+  } else if (
+    typeof define == 'function' &&
+    typeof define.amd == 'object' &&
+    define.amd
+  ) {
+    define(function() {
+      return utf8;
+    });
+  } else { // in Rhino or a web browser
+    root.utf8 = utf8;
+  }
 
 }(this));
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{}],44:[function(require,module,exports){
+},{}],65:[function(require,module,exports){
 
 /**
  * Module dependencies.
@@ -5739,7 +10561,7 @@ try {
   module.exports = false;
 }
 
-},{"global":45}],45:[function(require,module,exports){
+},{"global":66}],66:[function(require,module,exports){
 
 /**
  * Returns `this`. Execute this without a "context" (i.e. without it being
@@ -5749,7 +10571,7 @@ try {
 
 module.exports = (function () { return this; })();
 
-},{}],46:[function(require,module,exports){
+},{}],67:[function(require,module,exports){
 
 var indexOf = [].indexOf;
 
@@ -5760,7 +10582,7 @@ module.exports = function(arr, obj){
   }
   return -1;
 };
-},{}],47:[function(require,module,exports){
+},{}],68:[function(require,module,exports){
 (function (global){
 /**
  * JSON parse.
@@ -5795,7 +10617,7 @@ module.exports = function parsejson(data) {
   }
 };
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{}],48:[function(require,module,exports){
+},{}],69:[function(require,module,exports){
 /**
  * Compiles a querystring
  * Returns string representation of the object
@@ -5834,7 +10656,7 @@ exports.decode = function(qs){
   return qry;
 };
 
-},{}],49:[function(require,module,exports){
+},{}],70:[function(require,module,exports){
 /**
  * Parses an URI
  *
@@ -5875,7 +10697,7 @@ module.exports = function parseuri(str) {
     return uri;
 };
 
-},{}],50:[function(require,module,exports){
+},{}],71:[function(require,module,exports){
 
 /**
  * Module dependencies.
@@ -5920,9 +10742,9 @@ function ws(uri, protocols, opts) {
 
 if (WebSocket) ws.prototype = WebSocket.prototype;
 
-},{}],51:[function(require,module,exports){
+},{}],72:[function(require,module,exports){
 
-},{}],52:[function(require,module,exports){
+},{}],73:[function(require,module,exports){
 /*!
  * The buffer module from node.js, for the browser.
  *
@@ -6976,7 +11798,7 @@ function decodeUtf8Char (str) {
   }
 }
 
-},{"base64-js":53,"ieee754":54,"is-array":55}],53:[function(require,module,exports){
+},{"base64-js":74,"ieee754":75,"is-array":76}],74:[function(require,module,exports){
 var lookup = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
 ;(function (exports) {
@@ -7098,93 +11920,93 @@ var lookup = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 	exports.fromByteArray = uint8ToBase64
 }(typeof exports === 'undefined' ? (this.base64js = {}) : exports))
 
-},{}],54:[function(require,module,exports){
-exports.read = function(buffer, offset, isLE, mLen, nBytes) {
-  var e, m,
-      eLen = nBytes * 8 - mLen - 1,
-      eMax = (1 << eLen) - 1,
-      eBias = eMax >> 1,
-      nBits = -7,
-      i = isLE ? (nBytes - 1) : 0,
-      d = isLE ? -1 : 1,
-      s = buffer[offset + i];
+},{}],75:[function(require,module,exports){
+exports.read = function (buffer, offset, isLE, mLen, nBytes) {
+  var e, m
+  var eLen = nBytes * 8 - mLen - 1
+  var eMax = (1 << eLen) - 1
+  var eBias = eMax >> 1
+  var nBits = -7
+  var i = isLE ? (nBytes - 1) : 0
+  var d = isLE ? -1 : 1
+  var s = buffer[offset + i]
 
-  i += d;
+  i += d
 
-  e = s & ((1 << (-nBits)) - 1);
-  s >>= (-nBits);
-  nBits += eLen;
-  for (; nBits > 0; e = e * 256 + buffer[offset + i], i += d, nBits -= 8);
+  e = s & ((1 << (-nBits)) - 1)
+  s >>= (-nBits)
+  nBits += eLen
+  for (; nBits > 0; e = e * 256 + buffer[offset + i], i += d, nBits -= 8) {}
 
-  m = e & ((1 << (-nBits)) - 1);
-  e >>= (-nBits);
-  nBits += mLen;
-  for (; nBits > 0; m = m * 256 + buffer[offset + i], i += d, nBits -= 8);
+  m = e & ((1 << (-nBits)) - 1)
+  e >>= (-nBits)
+  nBits += mLen
+  for (; nBits > 0; m = m * 256 + buffer[offset + i], i += d, nBits -= 8) {}
 
   if (e === 0) {
-    e = 1 - eBias;
+    e = 1 - eBias
   } else if (e === eMax) {
-    return m ? NaN : ((s ? -1 : 1) * Infinity);
+    return m ? NaN : ((s ? -1 : 1) * Infinity)
   } else {
-    m = m + Math.pow(2, mLen);
-    e = e - eBias;
+    m = m + Math.pow(2, mLen)
+    e = e - eBias
   }
-  return (s ? -1 : 1) * m * Math.pow(2, e - mLen);
-};
+  return (s ? -1 : 1) * m * Math.pow(2, e - mLen)
+}
 
-exports.write = function(buffer, value, offset, isLE, mLen, nBytes) {
-  var e, m, c,
-      eLen = nBytes * 8 - mLen - 1,
-      eMax = (1 << eLen) - 1,
-      eBias = eMax >> 1,
-      rt = (mLen === 23 ? Math.pow(2, -24) - Math.pow(2, -77) : 0),
-      i = isLE ? 0 : (nBytes - 1),
-      d = isLE ? 1 : -1,
-      s = value < 0 || (value === 0 && 1 / value < 0) ? 1 : 0;
+exports.write = function (buffer, value, offset, isLE, mLen, nBytes) {
+  var e, m, c
+  var eLen = nBytes * 8 - mLen - 1
+  var eMax = (1 << eLen) - 1
+  var eBias = eMax >> 1
+  var rt = (mLen === 23 ? Math.pow(2, -24) - Math.pow(2, -77) : 0)
+  var i = isLE ? 0 : (nBytes - 1)
+  var d = isLE ? 1 : -1
+  var s = value < 0 || (value === 0 && 1 / value < 0) ? 1 : 0
 
-  value = Math.abs(value);
+  value = Math.abs(value)
 
   if (isNaN(value) || value === Infinity) {
-    m = isNaN(value) ? 1 : 0;
-    e = eMax;
+    m = isNaN(value) ? 1 : 0
+    e = eMax
   } else {
-    e = Math.floor(Math.log(value) / Math.LN2);
+    e = Math.floor(Math.log(value) / Math.LN2)
     if (value * (c = Math.pow(2, -e)) < 1) {
-      e--;
-      c *= 2;
+      e--
+      c *= 2
     }
     if (e + eBias >= 1) {
-      value += rt / c;
+      value += rt / c
     } else {
-      value += rt * Math.pow(2, 1 - eBias);
+      value += rt * Math.pow(2, 1 - eBias)
     }
     if (value * c >= 2) {
-      e++;
-      c /= 2;
+      e++
+      c /= 2
     }
 
     if (e + eBias >= eMax) {
-      m = 0;
-      e = eMax;
+      m = 0
+      e = eMax
     } else if (e + eBias >= 1) {
-      m = (value * c - 1) * Math.pow(2, mLen);
-      e = e + eBias;
+      m = (value * c - 1) * Math.pow(2, mLen)
+      e = e + eBias
     } else {
-      m = value * Math.pow(2, eBias - 1) * Math.pow(2, mLen);
-      e = 0;
+      m = value * Math.pow(2, eBias - 1) * Math.pow(2, mLen)
+      e = 0
     }
   }
 
-  for (; mLen >= 8; buffer[offset + i] = m & 0xff, i += d, m /= 256, mLen -= 8);
+  for (; mLen >= 8; buffer[offset + i] = m & 0xff, i += d, m /= 256, mLen -= 8) {}
 
-  e = (e << mLen) | m;
-  eLen += mLen;
-  for (; eLen > 0; buffer[offset + i] = e & 0xff, i += d, e /= 256, eLen -= 8);
+  e = (e << mLen) | m
+  eLen += mLen
+  for (; eLen > 0; buffer[offset + i] = e & 0xff, i += d, e /= 256, eLen -= 8) {}
 
-  buffer[offset + i - d] |= s * 128;
-};
+  buffer[offset + i - d] |= s * 128
+}
 
-},{}],55:[function(require,module,exports){
+},{}],76:[function(require,module,exports){
 
 /**
  * isArray
@@ -7219,7 +12041,7 @@ module.exports = isArray || function (val) {
   return !! val && '[object Array]' == str.call(val);
 };
 
-},{}],56:[function(require,module,exports){
+},{}],77:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -7522,7 +12344,7 @@ function isUndefined(arg) {
   return arg === void 0;
 }
 
-},{}],57:[function(require,module,exports){
+},{}],78:[function(require,module,exports){
 // shim for using process in browser
 
 var process = module.exports = {};
@@ -7610,4 +12432,4 @@ process.chdir = function (dir) {
     throw new Error('process.chdir is not supported');
 };
 
-},{}]},{},[11]);
+},{}]},{},[28]);
